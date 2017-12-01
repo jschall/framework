@@ -3,12 +3,35 @@
 #define __CTOR_CONCAT(a,b) a ## b
 #define _CTOR_CONCAT(a,b) __CTOR_CONCAT(a,b)
 
+#define CTOR_HOOK() { __asm__("bkpt"); }
+
+#ifndef CTOR_HOOK
+#define CTOR_HOOK() {}
+#endif
+
 #define RUN_ON(SEQ_NAME) \
-static void __attribute__((unused,constructor(100+3*(_CTOR_SEQUENCE_LENGTH+_CTOR_CONCAT(_CTOR_SEQUENCE_,SEQ_NAME))))) _CTOR_CONCAT(_local_ctor_,__LINE__)(void)
+static void _CTOR_CONCAT(_local_ctor_,__LINE__) (void); \
+static void __attribute__((unused,constructor(100+3*(_CTOR_SEQUENCE_LENGTH+_CTOR_CONCAT(_CTOR_SEQUENCE_,SEQ_NAME))))) _CTOR_CONCAT(_local_ctor_wrapper_,__LINE__)(void) {  \
+    CTOR_HOOK(); \
+    _CTOR_CONCAT(_local_ctor_,__LINE__)(); \
+} \
+static void _CTOR_CONCAT(_local_ctor_,__LINE__) (void)
+    
 #define RUN_BEFORE(SEQ_NAME) \
-static void __attribute__((unused,constructor(100+3*(_CTOR_SEQUENCE_LENGTH+_CTOR_CONCAT(_CTOR_SEQUENCE_,SEQ_NAME))-1))) _CTOR_CONCAT(_local_ctor_,__LINE__)(void)
+static void _CTOR_CONCAT(_local_ctor_,__LINE__) (void); \
+static void __attribute__((unused,constructor(100+3*(_CTOR_SEQUENCE_LENGTH+_CTOR_CONCAT(_CTOR_SEQUENCE_,SEQ_NAME))-1))) _CTOR_CONCAT(_local_ctor_wrapper_,__LINE__)(void) { \
+    CTOR_HOOK(); \
+    _CTOR_CONCAT(_local_ctor_,__LINE__)(); \
+} \
+static void _CTOR_CONCAT(_local_ctor_,__LINE__) (void)
+
 #define RUN_AFTER(SEQ_NAME) \
-static void __attribute__((unused,constructor(100+3*(_CTOR_SEQUENCE_LENGTH+_CTOR_CONCAT(_CTOR_SEQUENCE_,SEQ_NAME))+1))) _CTOR_CONCAT(_local_ctor_,__LINE__)(void)
+static void _CTOR_CONCAT(_local_ctor_,__LINE__) (void); \
+static void __attribute__((unused,constructor(100+3*(_CTOR_SEQUENCE_LENGTH+_CTOR_CONCAT(_CTOR_SEQUENCE_,SEQ_NAME))+1))) _CTOR_CONCAT(_local_ctor_wrapper_,__LINE__)(void) { \
+    CTOR_HOOK(); \
+    _CTOR_CONCAT(_local_ctor_,__LINE__)(); \
+} \
+static void _CTOR_CONCAT(_local_ctor_,__LINE__) (void)
 
 enum {
     _CTOR_SEQUENCE_BOOT_MSG_RETRIEVAL,
@@ -16,6 +39,7 @@ enum {
     _CTOR_SEQUENCE_CH_SYS_INIT,
     _CTOR_SEQUENCE_WORKER_THREADS_START,
     _CTOR_SEQUENCE_PUBSUB_TOPIC_INIT,
+    _CTOR_SEQUENCE_CAN_INIT,
     _CTOR_SEQUENCE_PARAM_INIT,
     _CTOR_SEQUENCE_UAVCAN_INIT,
     _CTOR_SEQUENCE_INIT_END,
