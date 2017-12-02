@@ -236,6 +236,7 @@ static void _uavcan_set_node_id(struct uavcan_instance_s* instance, uint8_t node
     }
 
     chMtxLock(&instance->canard_mtx);
+    can_set_auto_retransmit_mode(can_get_instance(instance->can_idx), node_id != 0);
     canardSetLocalNodeID(&instance->canard, node_id);
     chMtxUnlock(&instance->canard_mtx);
 }
