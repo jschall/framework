@@ -94,7 +94,6 @@ static void _uavcan_set_node_id(struct uavcan_instance_s* instance, uint8_t node
 static bool uavcan_should_accept_transfer(const CanardInstance* canard, uint64_t* out_data_type_signature, uint16_t data_type_id, CanardTransferType transfer_type, uint8_t source_node_id);
 static void uavcan_on_transfer_rx(CanardInstance* canard, CanardRxTransfer* transfer);
 
-static void convert_CanardCANFrame_to_can_frame(const CanardCANFrame* canard_frame, struct can_frame_s* ret);
 static CanardCANFrame convert_can_frame_to_CanardCANFrame(const struct can_frame_s* frame);
 
 static void uavcan_transfer_id_map_init(struct transfer_id_map_s* map, size_t map_mem_size, void* map_mem);
@@ -256,77 +255,197 @@ void uavcan_set_node_id(uint8_t uavcan_idx, uint8_t node_id) {
     return _uavcan_set_node_id(uavcan_get_instance(uavcan_idx), node_id);
 }
 
-static bool uavcan_enqueue_all_tx_frames(struct uavcan_instance_s* instance, systime_t tx_timeout, struct pubsub_topic_s* completion_topic) {
-    if (!instance) {
-        return false;
+struct uavcan_transmit_state_s {
+    bool failed;
+    struct uavcan_instance_s* instance;
+    struct can_tx_frame_s* frame_list_head;
+    struct can_tx_frame_s* frame_list_tail;
+    size_t frame_bit_ofs;
+};
+
+static void uavcan_transmit_chunk_handler(uint8_t* chunk, size_t bitlen, void* ctx) {
+    struct uavcan_transmit_state_s* tx_state = ctx;
+
+    if (tx_state->failed || bitlen == 0) {
+        return;
     }
-    
-    // Must own the mutex
-    chDbgCheck(instance->canard_mtx.owner == chThdGetSelfX());
 
-    const CanardCANFrame* canard_frame;
-    struct can_tx_frame_s* frame_list = NULL;
-    while ((canard_frame = canardPeekTxQueue(&instance->canard))) {
-        struct can_tx_frame_s* frame = can_allocate_tx_frame_and_append(instance->can_instance, &frame_list);
+    if (!tx_state->frame_list_tail) {
+        tx_state->frame_list_tail = can_allocate_tx_frame_and_append(tx_state->instance->can_instance, &tx_state->frame_list_head);
+        if (!tx_state->frame_list_tail) {
+            tx_state->failed = true;
+            return;
+        }
+        memset(tx_state->frame_list_tail->content.data, 0, 8);
+    }
 
-        if (!frame) {
-            can_free_tx_frames(instance->can_instance, &frame_list);
-            while (canardPeekTxQueue(&instance->canard)) {
-                canardPopTxQueue(&instance->canard);
+    size_t chunk_bit_ofs = 0;
+
+    while (chunk_bit_ofs < bitlen) {
+        size_t frame_copy_bits = MIN(bitlen-chunk_bit_ofs, 7*8-tx_state->frame_bit_ofs);
+        if (frame_copy_bits == 0) {
+            bool make_room_for_crc = tx_state->frame_list_head->next == NULL;
+            tx_state->frame_list_tail = can_allocate_tx_frame_and_append(tx_state->instance->can_instance, &tx_state->frame_list_head);
+            if (!tx_state->frame_list_tail) {
+                tx_state->failed = true;
+                return;
             }
-            return false;
+            memset(tx_state->frame_list_tail->content.data, 0, 8);
+            if (make_room_for_crc) {
+                memcpy(tx_state->frame_list_tail->content.data, &tx_state->frame_list_head->content.data[5], 2);
+                memmove(&tx_state->frame_list_head->content.data[2], tx_state->frame_list_head->content.data, 5);
+                tx_state->frame_bit_ofs = 16;
+            } else {
+                tx_state->frame_bit_ofs = 0;
+            }
+            continue;
         }
 
-        convert_CanardCANFrame_to_can_frame(canard_frame, &frame->content);
-        canardPopTxQueue(&instance->canard);
+        while (frame_copy_bits > 0) {
+            uint8_t src_bit_ofs = chunk_bit_ofs%8;
+            uint8_t dst_bit_ofs = tx_state->frame_bit_ofs%8;
+
+            uint8_t bits_copied = MIN(frame_copy_bits, MIN(8U-dst_bit_ofs, 8U-src_bit_ofs));
+
+            if (chunk) {
+                uint8_t src = chunk[chunk_bit_ofs/8];
+                uint8_t* dst = &tx_state->frame_list_tail->content.data[tx_state->frame_bit_ofs/8];
+
+                src >>= src_bit_ofs;
+                src <<= dst_bit_ofs;
+                src &= ~((1<<dst_bit_ofs)-1);
+
+                *dst |= src;
+            }
+
+            chunk_bit_ofs += bits_copied;
+            frame_copy_bits -= bits_copied;
+            tx_state->frame_bit_ofs += bits_copied;
+        }
+
+
+        tx_state->frame_list_tail->content.DLC = (tx_state->frame_bit_ofs+7)/8 + 1;
+    }
+}
+
+static bool _uavcan_send(struct uavcan_instance_s* instance, const struct uavcan_message_descriptor_s* const msg_descriptor, uint16_t data_type_id, uint8_t priority, uint8_t transfer_id, uint8_t dest_node_id, void* msg_data) {
+    if (!instance || !msg_descriptor || !msg_descriptor->serializer_func || !msg_data) {
+        return false;
     }
 
-    can_enqueue_tx_frames(instance->can_instance, &frame_list, tx_timeout, completion_topic);
+    if (_uavcan_get_node_id(instance) == 0 && (data_type_id > 0b11 || msg_descriptor->transfer_type != CanardTransferTypeBroadcast)) {
+        return false;
+    }
+
+    if (msg_descriptor->transfer_type != CanardTransferTypeBroadcast && data_type_id > 0xff) {
+        return false;
+    }
+
+    if (_uavcan_get_node_id(instance) > 127) {
+        return false;
+    }
+
+    struct uavcan_transmit_state_s tx_state = {
+        false, instance, NULL, NULL, 0
+    };
+
+    msg_descriptor->serializer_func(msg_data, uavcan_transmit_chunk_handler, &tx_state);
+    if (tx_state.failed || !tx_state.frame_list_head) {
+        can_free_tx_frames(instance->can_instance, &tx_state.frame_list_head);
+        return false;
+    }
+
+
+    uint32_t can_id = 0;
+    can_id |= (uint32_t)(priority&0x1f) << 24;
+    if (msg_descriptor->transfer_type == CanardTransferTypeBroadcast) {
+        can_id |= (uint32_t)(data_type_id) << 8;
+    } else {
+        can_id |= data_type_id<<16;
+        if (msg_descriptor->transfer_type == CanardTransferTypeRequest) {
+            can_id |= 1<<15;
+        }
+        can_id |= dest_node_id<<8;
+        can_id |= 1<<7;
+    }
+
+    if (_uavcan_get_node_id(instance) == 0) {
+        can_id |= crc16_ccitt(tx_state.frame_list_head->content.data, 7, 0xffff);
+    }
+
+    can_id |= _uavcan_get_node_id(instance);
+
+    uint8_t toggle = 0;
+    struct can_tx_frame_s* frame = tx_state.frame_list_head;
+    while (frame != NULL) {
+        frame->content.IDE = 1;
+        frame->content.RTR = 0;
+        frame->content.EID = can_id;
+        if (frame == tx_state.frame_list_head) {
+            frame->content.data[frame->content.DLC-1] |= 1<<7;
+        }
+        if (frame == tx_state.frame_list_tail) {
+            frame->content.data[frame->content.DLC-1] |= 1<<6;
+        }
+        frame->content.data[frame->content.DLC-1] |= toggle << 5;
+        frame->content.data[frame->content.DLC-1] |= transfer_id&0x1f;
+
+        toggle = toggle?0:1;
+
+        frame = frame->next;
+    }
+
+    if (tx_state.frame_list_head != tx_state.frame_list_tail) {
+        uint16_t crc16 = crc16_ccitt((void*)&msg_descriptor->data_type_signature, 8, 0xffff);
+        crc16 = crc16_ccitt(&tx_state.frame_list_head->content.data[2], 5, crc16);
+        frame = tx_state.frame_list_head->next;
+        while (frame != NULL) {
+            crc16 = crc16_ccitt(&frame->content.data[0], 7, crc16);
+            frame = frame->next;
+        }
+        memcpy(tx_state.frame_list_head->content.data, &crc16, 2);
+    }
+
+    can_enqueue_tx_frames(instance->can_instance, &tx_state.frame_list_head, TIME_INFINITE, NULL);
 
     return true;
 }
 
-static bool _uavcan_broadcast(struct uavcan_instance_s* instance, const struct uavcan_message_descriptor_s* const msg_descriptor, uint8_t priority, void* msg_data) {
-    if (!instance || !instance->outgoing_message_buf || !msg_descriptor || !msg_descriptor->serializer_func || !msg_data) {
-        return false;
-    }
-
-    chMtxLock(&instance->canard_mtx);
-    uint16_t data_type_id = msg_descriptor->default_data_type_id;
-    size_t outgoing_message_len = msg_descriptor->serializer_func(msg_data, instance->outgoing_message_buf);
-    uint8_t* transfer_id = uavcan_transfer_id_map_retrieve(&instance->transfer_id_map, false, data_type_id, 0);
-    canardBroadcast(&instance->canard, msg_descriptor->data_type_signature, data_type_id, transfer_id, priority, instance->outgoing_message_buf, outgoing_message_len);
-    bool ret = uavcan_enqueue_all_tx_frames(instance, TIME_INFINITE, NULL);
-    chMtxUnlock(&instance->canard_mtx);
-
-    return ret;
-}
-
 bool uavcan_broadcast(uint8_t uavcan_idx, const struct uavcan_message_descriptor_s* const msg_descriptor, uint8_t priority, void* msg_data) {
-    return _uavcan_broadcast(uavcan_get_instance(uavcan_idx), msg_descriptor, priority, msg_data);
-}
-
-static bool _uavcan_request(struct uavcan_instance_s* instance, const struct uavcan_message_descriptor_s* const msg_descriptor, uint8_t priority, uint8_t dest_node_id, void* msg_data) {
-    if (!instance || !instance->outgoing_message_buf || !msg_descriptor || !msg_descriptor->serializer_func || !msg_data) {
+    struct uavcan_instance_s* instance = uavcan_get_instance(uavcan_idx);
+    if (!instance) {
         return false;
     }
 
-    chMtxLock(&instance->canard_mtx);
     uint16_t data_type_id = msg_descriptor->default_data_type_id;
-    size_t outgoing_message_len = msg_descriptor->serializer_func(msg_data, instance->outgoing_message_buf);
     uint8_t* transfer_id = uavcan_transfer_id_map_retrieve(&instance->transfer_id_map, false, data_type_id, 0);
-    canardRequestOrRespond(&instance->canard, dest_node_id, msg_descriptor->data_type_signature, data_type_id, transfer_id, priority, CanardRequest, instance->outgoing_message_buf, outgoing_message_len);
-    bool ret = uavcan_enqueue_all_tx_frames(instance, TIME_INFINITE, NULL);
-    chMtxUnlock(&instance->canard_mtx);
-    return ret;
+    if(_uavcan_send(instance, msg_descriptor, data_type_id, priority, *transfer_id, 0, msg_data)) {
+        (*transfer_id)++;
+        return true;
+    } else {
+        return false;
+    }
 }
 
 bool uavcan_request(uint8_t uavcan_idx, const struct uavcan_message_descriptor_s* const msg_descriptor, uint8_t priority, uint8_t dest_node_id, void* msg_data) {
-    return _uavcan_request(uavcan_get_instance(uavcan_idx), msg_descriptor, priority, dest_node_id, msg_data);
+    struct uavcan_instance_s* instance = uavcan_get_instance(uavcan_idx);
+    if (!instance) {
+        return false;
+    }
+
+    uint16_t data_type_id = msg_descriptor->default_data_type_id;
+    uint8_t* transfer_id = uavcan_transfer_id_map_retrieve(&instance->transfer_id_map, false, data_type_id, 0);
+    if(_uavcan_send(instance, msg_descriptor, data_type_id, priority, *transfer_id, dest_node_id, msg_data)) {
+        (*transfer_id)++;
+        return true;
+    } else {
+        return false;
+    }
 }
 
-static bool _uavcan_respond(struct uavcan_instance_s* instance, const struct uavcan_deserialized_message_s* const req_msg, void* msg_data) {
-    if (!instance || !instance->outgoing_message_buf || !req_msg || !req_msg->descriptor || !req_msg->descriptor->resp_descriptor || !req_msg->descriptor->resp_descriptor->serializer_func || !msg_data) {
+bool uavcan_respond(uint8_t uavcan_idx, const struct uavcan_deserialized_message_s* const req_msg, void* msg_data) {
+    struct uavcan_instance_s* instance = uavcan_get_instance(uavcan_idx);
+    if (!instance) {
         return false;
     }
 
@@ -334,18 +453,8 @@ static bool _uavcan_respond(struct uavcan_instance_s* instance, const struct uav
     uint8_t priority = req_msg->priority;
     uint8_t transfer_id = req_msg->transfer_id;
     uint8_t dest_node_id = req_msg->source_node_id;
-
-    chMtxLock(&instance->canard_mtx);
     uint16_t data_type_id = msg_descriptor->default_data_type_id;
-    size_t outgoing_message_len = msg_descriptor->serializer_func(msg_data, instance->outgoing_message_buf);
-    canardRequestOrRespond(&instance->canard, dest_node_id, msg_descriptor->data_type_signature, data_type_id, &transfer_id, priority, CanardResponse, instance->outgoing_message_buf, outgoing_message_len);
-    bool ret = uavcan_enqueue_all_tx_frames(instance, TIME_INFINITE, NULL);
-    chMtxUnlock(&instance->canard_mtx);
-    return ret;
-}
-
-bool uavcan_respond(uint8_t uavcan_idx, const struct uavcan_deserialized_message_s* const req_msg, void* msg_data) {
-    return _uavcan_respond(uavcan_get_instance(uavcan_idx), req_msg, msg_data);
+    return _uavcan_send(instance, msg_descriptor, data_type_id, priority, transfer_id, dest_node_id, msg_data);
 }
 
 static void uavcan_can_rx_handler(size_t msg_size, const void* msg, void* ctx) {
@@ -405,18 +514,6 @@ static uint8_t uavcan_get_idx(struct uavcan_instance_s* instance_arg) {
         instance = instance->next;
     }
     return idx;
-}
-
-static void convert_CanardCANFrame_to_can_frame(const CanardCANFrame* canard_frame, struct can_frame_s* ret) {
-    ret->IDE = (canard_frame->id & CANARD_CAN_FRAME_EFF) != 0;
-    ret->RTR = (canard_frame->id & CANARD_CAN_FRAME_RTR) != 0;
-    if (ret->IDE) {
-        ret->EID = canard_frame->id & CANARD_CAN_EXT_ID_MASK;
-    } else {
-        ret->SID = canard_frame->id & CANARD_CAN_STD_ID_MASK;
-    }
-    ret->DLC = canard_frame->data_len;
-    memcpy(ret->data, canard_frame->data, ret->DLC);
 }
 
 static CanardCANFrame convert_can_frame_to_CanardCANFrame(const struct can_frame_s* frame) {
