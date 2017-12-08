@@ -36,17 +36,26 @@ struct pubsub_listener_s {
     void* handler_cb_ctx;
     mutex_t mtx;
     struct pubsub_listener_s* next;
+#if CH_DBG_ENABLE_CHECKS && DBG_INIT_ORDER_CHECKS
+    struct pubsub_listener_s* init_check_next;
+#endif
 };
 
 struct pubsub_topic_s {
     struct pubsub_message_s* message_list_tail;
     struct pubsub_topic_group_s* group;
     struct pubsub_listener_s* listener_list_head;
+#if CH_DBG_ENABLE_CHECKS && DBG_INIT_ORDER_CHECKS
+    struct pubsub_topic_s* init_check_next;
+#endif
 };
 
 struct pubsub_topic_group_s {
     struct fifoallocator_instance_s allocator;
     mutex_t mtx;
+#if CH_DBG_ENABLE_CHECKS && DBG_INIT_ORDER_CHECKS
+    struct pubsub_topic_group_s* init_check_next;
+#endif
 };
 
 // - Creates a new topic group with a separate memory pool and mutex. This new topic group is insulated from problems on
