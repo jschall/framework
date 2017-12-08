@@ -34,26 +34,37 @@
 
 #define UNUSED(x) ((void)(x))
 
-#define LINKED_LIST_APPEND(TYPE, HEAD_PTR, NEW_ITEM_PTR) { \
-    (NEW_ITEM_PTR)->next = NULL; \
+#define LINKED_LIST_APPEND(TYPE, NEXT_FIELD, HEAD_PTR, NEW_ITEM_PTR) { \
+    (NEW_ITEM_PTR)->NEXT_FIELD = NULL; \
     TYPE** insert_ptr = &(HEAD_PTR); \
     while(*insert_ptr) { \
-        insert_ptr = &(*insert_ptr)->next; \
+        insert_ptr = &(*insert_ptr)->NEXT_FIELD; \
     } \
     *insert_ptr = (NEW_ITEM_PTR); \
 }
 
-#define LINKED_LIST_REMOVE(TYPE, HEAD_PTR, REMOVE_ITEM_PTR) { \
+#define LINKED_LIST_REMOVE(TYPE, NEXT_FIELD, HEAD_PTR, REMOVE_ITEM_PTR) { \
     TYPE** remove_ptr = &(HEAD_PTR); \
     while (*remove_ptr && *remove_ptr != (REMOVE_ITEM_PTR)) { \
-        remove_ptr = &(*remove_ptr)->next; \
+        remove_ptr = &(*remove_ptr)->NEXT_FIELD; \
     } \
     \
     if (*remove_ptr) { \
-        *remove_ptr = (*remove_ptr)->next; \
+        *remove_ptr = (*remove_ptr)->NEXT_FIELD; \
     } \
 }
 
+#define LINKED_LIST_FIND(TYPE, NEXT_FIELD, HEAD_PTR, FIND_ITEM_PTR, RET) { \
+    RET = false; \
+    TYPE* found_item = HEAD_PTR; \
+    while(found_item) { \
+        if (found_item == FIND_ITEM_PTR) { \
+            RET = true; \
+            break; \
+        } \
+        found_item = found_item->NEXT_FIELD; \
+    } \
+}
 
 float sinf_fast(float x);
 float cosf_fast(float x);

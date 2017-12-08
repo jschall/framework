@@ -66,7 +66,7 @@ bool pin_change_publisher_enable_pin(uint32_t line, enum pin_change_type_t mode,
     irq_topic->channel = channel;
     irq_topic->topic = topic;
 
-    LINKED_LIST_APPEND(struct pin_change_publisher_topic_s, irq_topic_list_head, irq_topic);
+    LINKED_LIST_APPEND(struct pin_change_publisher_topic_s, next, irq_topic_list_head, irq_topic);
 
     const EXTChannelConfig channel_conf = {pin_change_publisher_mode, pin_change_publisher_common_handler};
     extSetChannelModeI(&EXTD1, channel, &channel_conf);
@@ -84,7 +84,7 @@ void pin_change_publisher_disable_pin(uint32_t line) {
     struct pin_change_publisher_topic_s* irq_topic = pin_change_publisher_find_irq_topic(channel);
 
     if (irq_topic) {
-        LINKED_LIST_REMOVE(struct pin_change_publisher_topic_s, irq_topic_list_head, irq_topic);
+        LINKED_LIST_REMOVE(struct pin_change_publisher_topic_s, next, irq_topic_list_head, irq_topic);
     }
 
     if (extcfg.channels[channel].mode != EXT_CH_MODE_DISABLED) {

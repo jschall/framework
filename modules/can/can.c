@@ -216,7 +216,7 @@ struct can_tx_frame_s* can_allocate_tx_frame_and_append_I(struct can_instance_s*
         return NULL;
     }
     
-    LINKED_LIST_APPEND(struct can_tx_frame_s, *frame_list, new_frame);
+    LINKED_LIST_APPEND(struct can_tx_frame_s, next, *frame_list, new_frame);
 
     return new_frame;
 }
@@ -333,7 +333,7 @@ struct can_instance_s* can_driver_register(uint8_t can_idx, void* driver_ctx, co
 
     worker_thread_add_timer_task(&WT_EXPIRE, &instance->expire_timer_task, can_expire_handler, instance, TIME_INFINITE, false);
 
-    LINKED_LIST_APPEND(struct can_instance_s, can_instance_list_head, instance);
+    LINKED_LIST_APPEND(struct can_instance_s, next, can_instance_list_head, instance);
 
     return instance;
 }

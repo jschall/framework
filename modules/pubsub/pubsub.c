@@ -52,7 +52,7 @@ void pubsub_listener_init_and_register(struct pubsub_listener_s* listener, struc
     chMtxLock(&topic->group->mtx);
 
     // append listener to topic's listener list
-    LINKED_LIST_APPEND(struct pubsub_listener_s, topic->listener_list_head, listener);
+    LINKED_LIST_APPEND(struct pubsub_listener_s, next, topic->listener_list_head, listener);
 
     // unlock topic group
     chMtxUnlock(&topic->group->mtx);
@@ -67,7 +67,7 @@ void pubsub_listener_unregister(struct pubsub_listener_s* listener) {
     chMtxLock(&listener->topic->group->mtx);
 
     // remove listener from topic's listener list
-    LINKED_LIST_REMOVE(struct pubsub_listener_s, listener->topic->listener_list_head, listener);
+    LINKED_LIST_REMOVE(struct pubsub_listener_s, next, listener->topic->listener_list_head, listener);
 
     chMtxUnlock(&listener->topic->group->mtx);
 }

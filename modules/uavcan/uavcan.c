@@ -119,7 +119,7 @@ static void uavcan_init(uint8_t can_dev_idx) {
 
     can_set_auto_retransmit_mode(instance->can_instance, false);
 
-    LINKED_LIST_APPEND(struct uavcan_instance_s, uavcan_instance_list_head, instance);
+    LINKED_LIST_APPEND(struct uavcan_instance_s, next, uavcan_instance_list_head, instance);
 
     instance->idx = uavcan_get_idx(instance);
 
@@ -186,7 +186,7 @@ static struct pubsub_topic_s* _uavcan_get_message_topic(struct uavcan_instance_s
     pubsub_init_topic(&rx_list_item->topic, NULL);
 
     // append it
-    LINKED_LIST_APPEND(struct uavcan_rx_list_item_s, instance->rx_list_head, rx_list_item);
+    LINKED_LIST_APPEND(struct uavcan_rx_list_item_s, next, instance->rx_list_head, rx_list_item);
 
     chMtxUnlock(&instance->canard_mtx);
 

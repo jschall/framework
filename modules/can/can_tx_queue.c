@@ -85,7 +85,7 @@ void can_tx_queue_remove_I(struct can_tx_queue_s* instance, struct can_tx_frame_
     chDbgCheck(can_tx_queue_frame_exists_in_queue(instance, frame));
 #endif
 
-    LINKED_LIST_REMOVE(struct can_tx_frame_s, instance->head, frame);
+    LINKED_LIST_REMOVE(struct can_tx_frame_s, next, instance->head, frame);
 }
 
 struct can_tx_frame_s* can_tx_queue_peek_I(struct can_tx_queue_s* instance) {

@@ -110,7 +110,7 @@ void worker_thread_timer_task_reschedule(struct worker_thread_s* worker_thread, 
 
 void worker_thread_remove_timer_task_I(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task) {
     chDbgCheckClassI();
-    LINKED_LIST_REMOVE(struct worker_thread_timer_task_s, worker_thread->timer_task_list_head, task);
+    LINKED_LIST_REMOVE(struct worker_thread_timer_task_s, next, worker_thread->timer_task_list_head, task);
 }
 
 void worker_thread_remove_timer_task(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task) {
@@ -135,7 +135,7 @@ void worker_thread_add_listener_task(struct worker_thread_s* worker_thread, stru
     pubsub_listener_set_waiting_thread_reference(&task->listener, &worker_thread->suspend_trp);
 
     chSysLock();
-    LINKED_LIST_APPEND(struct worker_thread_listener_task_s, worker_thread->listener_task_list_head, task);
+    LINKED_LIST_APPEND(struct worker_thread_listener_task_s, next, worker_thread->listener_task_list_head, task);
     chSysUnlock();
 
     // Wake worker thread to process tasks
@@ -146,7 +146,7 @@ void worker_thread_remove_listener_task(struct worker_thread_s* worker_thread, s
     pubsub_listener_unregister(&task->listener);
 
     chSysLock();
-    LINKED_LIST_REMOVE(struct worker_thread_listener_task_s, worker_thread->listener_task_list_head, task);
+    LINKED_LIST_REMOVE(struct worker_thread_listener_task_s, next, worker_thread->listener_task_list_head, task);
     chSysUnlock();
 }
 
@@ -165,7 +165,7 @@ void worker_thread_add_publisher_task_I(struct worker_thread_s* worker_thread, s
         chPoolAddI(&task->pool, chCoreAllocI(mem_block_size));
     }
 
-    LINKED_LIST_APPEND(struct worker_thread_publisher_task_s, worker_thread->publisher_task_list_head, task);
+    LINKED_LIST_APPEND(struct worker_thread_publisher_task_s, next, worker_thread->publisher_task_list_head, task);
 }
 
 void worker_thread_add_publisher_task(struct worker_thread_s* worker_thread, struct worker_thread_publisher_task_s* task, size_t msg_max_size, size_t msg_queue_depth) {
@@ -176,7 +176,7 @@ void worker_thread_add_publisher_task(struct worker_thread_s* worker_thread, str
 
 void worker_thread_remove_publisher_task(struct worker_thread_s* worker_thread, struct worker_thread_publisher_task_s* task) {
     chSysLock();
-    LINKED_LIST_REMOVE(struct worker_thread_publisher_task_s, worker_thread->publisher_task_list_head, task);
+    LINKED_LIST_REMOVE(struct worker_thread_publisher_task_s, next, worker_thread->publisher_task_list_head, task);
     chSysUnlock();
 }
 
