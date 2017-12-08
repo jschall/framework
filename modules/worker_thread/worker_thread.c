@@ -19,6 +19,15 @@ static bool worker_thread_listener_task_is_registered(struct worker_thread_s* wo
 static bool worker_thread_get_any_listener_task_due_I(struct worker_thread_s* worker_thread);
 #endif
 
+static void worker_thread_dbg_set_worker_thread_initialized_I(struct worker_thread_s* worker_thread);
+static void worker_thread_dbg_set_worker_thread_initialized(struct worker_thread_s* worker_thread);
+static void worker_thread_dbg_check_worker_thread_initialized_I(struct worker_thread_s* worker_thread);
+static void worker_thread_dbg_check_worker_thread_initialized(struct worker_thread_s* worker_thread);
+static void worker_thread_dbg_set_timer_task_initialized_I(struct worker_thread_timer_task_s* timer_task);
+static void worker_thread_dbg_set_timer_task_initialized(struct worker_thread_timer_task_s* timer_task);
+static void worker_thread_dbg_check_timer_task_initialized_I(struct worker_thread_timer_task_s* timer_task);
+static void worker_thread_dbg_check_timer_task_initialized(struct worker_thread_timer_task_s* timer_task);
+
 void worker_thread_init(struct worker_thread_s* worker_thread, const char* name, tprio_t priority) {
     chDbgCheck(worker_thread != NULL);
 
@@ -33,9 +42,12 @@ void worker_thread_init(struct worker_thread_s* worker_thread, const char* name,
 
     worker_thread->thread = NULL;
     worker_thread->suspend_trp = NULL;
+
+    worker_thread_dbg_set_worker_thread_initialized(worker_thread);
 }
 
 void worker_thread_start(struct worker_thread_s* worker_thread, size_t stack_size) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
     chDbgCheck(worker_thread != NULL);
 
     void* working_area = chCoreAllocAligned(THD_WORKING_AREA_SIZE(stack_size), PORT_WORKING_AREA_ALIGN);
@@ -63,6 +75,8 @@ static void _worker_thread_add_timer_task_no_wake_I(struct worker_thread_s* work
 void worker_thread_add_timer_task_I(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task, timer_task_handler_func_ptr task_func, void* ctx, systime_t timer_expiration_ticks, bool auto_repeat) {
     chDbgCheckClassI();
 
+    worker_thread_dbg_check_worker_thread_initialized_I(worker_thread);
+
     _worker_thread_add_timer_task_no_wake_I(worker_thread, task, task_func, ctx, timer_expiration_ticks, auto_repeat);
 
     // Wake worker thread to process tasks
@@ -70,6 +84,8 @@ void worker_thread_add_timer_task_I(struct worker_thread_s* worker_thread, struc
 }
 
 void worker_thread_add_timer_task(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task, timer_task_handler_func_ptr task_func, void* ctx, systime_t timer_expiration_ticks, bool auto_repeat) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
+
     chSysLock();
     _worker_thread_add_timer_task_no_wake_I(worker_thread, task, task_func, ctx, timer_expiration_ticks, auto_repeat);
     chSysUnlock();
@@ -80,6 +96,8 @@ void worker_thread_add_timer_task(struct worker_thread_s* worker_thread, struct 
 
 static void _worker_thread_timer_task_reschedule_no_wake_I(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task, systime_t timer_expiration_ticks) {
     chDbgCheckClassI();
+
+    worker_thread_dbg_check_timer_task_initialized_I(task);
 
     systime_t t_now = chVTGetSystemTimeX();
 
@@ -93,6 +111,9 @@ static void _worker_thread_timer_task_reschedule_no_wake_I(struct worker_thread_
 
 void worker_thread_timer_task_reschedule_I(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task, systime_t timer_expiration_ticks) {
     chDbgCheckClassI();
+
+    worker_thread_dbg_check_worker_thread_initialized_I(worker_thread);
+
     _worker_thread_timer_task_reschedule_no_wake_I(worker_thread, task, timer_expiration_ticks);
 
     // Wake worker thread to process tasks
@@ -100,6 +121,8 @@ void worker_thread_timer_task_reschedule_I(struct worker_thread_s* worker_thread
 }
 
 void worker_thread_timer_task_reschedule(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task, systime_t timer_expiration_ticks) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
+
     chSysLock();
     _worker_thread_timer_task_reschedule_no_wake_I(worker_thread, task, timer_expiration_ticks);
     chSysUnlock();
@@ -109,11 +132,15 @@ void worker_thread_timer_task_reschedule(struct worker_thread_s* worker_thread, 
 }
 
 void worker_thread_remove_timer_task_I(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task) {
+    worker_thread_dbg_check_worker_thread_initialized_I(worker_thread);
+
     chDbgCheckClassI();
     LINKED_LIST_REMOVE(struct worker_thread_timer_task_s, next, worker_thread->timer_task_list_head, task);
 }
 
 void worker_thread_remove_timer_task(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* task) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
+
     chSysLock();
     worker_thread_remove_timer_task_I(worker_thread, task);
     chSysUnlock();
@@ -129,6 +156,7 @@ void* worker_thread_task_get_user_context(struct worker_thread_timer_task_s* tas
 
 #ifdef MODULE_PUBSUB_ENABLED
 void worker_thread_add_listener_task(struct worker_thread_s* worker_thread, struct worker_thread_listener_task_s* task, struct pubsub_topic_s* topic, pubsub_message_handler_func_ptr handler_cb, void* handler_cb_ctx) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
     chDbgCheck(!worker_thread_listener_task_is_registered(worker_thread, task));
 
     pubsub_listener_init_and_register(&task->listener, topic, handler_cb, handler_cb_ctx);
@@ -143,6 +171,8 @@ void worker_thread_add_listener_task(struct worker_thread_s* worker_thread, stru
 }
 
 void worker_thread_remove_listener_task(struct worker_thread_s* worker_thread, struct worker_thread_listener_task_s* task) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
+
     pubsub_listener_unregister(&task->listener);
 
     chSysLock();
@@ -152,6 +182,7 @@ void worker_thread_remove_listener_task(struct worker_thread_s* worker_thread, s
 
 void worker_thread_add_publisher_task_I(struct worker_thread_s* worker_thread, struct worker_thread_publisher_task_s* task, size_t msg_max_size, size_t msg_queue_depth) {
     chDbgCheckClassI();
+    worker_thread_dbg_check_worker_thread_initialized_I(worker_thread);
     chDbgCheck(!worker_thread_publisher_task_is_registered_I(worker_thread, task));
 
     size_t mem_block_size = sizeof(struct worker_thread_publisher_msg_s)+msg_max_size;
@@ -175,6 +206,8 @@ void worker_thread_add_publisher_task(struct worker_thread_s* worker_thread, str
 }
 
 void worker_thread_remove_publisher_task(struct worker_thread_s* worker_thread, struct worker_thread_publisher_task_s* task) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
+
     chSysLock();
     LINKED_LIST_REMOVE(struct worker_thread_publisher_task_s, next, worker_thread->publisher_task_list_head, task);
     chSysUnlock();
@@ -208,6 +241,8 @@ bool worker_thread_publisher_task_publish_I(struct worker_thread_publisher_task_
 #endif
 
 void worker_thread_takeover(struct worker_thread_s* worker_thread) {
+    worker_thread_dbg_check_worker_thread_initialized(worker_thread);
+
     chRegSetThreadName(worker_thread->name);
     chThdSetPriority(worker_thread->priority);
     worker_thread->thread = chThdGetSelfX();
@@ -310,6 +345,8 @@ static void worker_thread_init_timer_task(struct worker_thread_timer_task_s* tas
     task->timer_expiration_ticks = timer_expiration_ticks;
     task->auto_repeat = auto_repeat;
     task->timer_begin_systime = timer_begin_systime;
+
+    worker_thread_dbg_set_timer_task_initialized_I(task);
 }
 
 static bool worker_thread_timer_task_is_registered_I(struct worker_thread_s* worker_thread, struct worker_thread_timer_task_s* check_task) {
@@ -423,4 +460,62 @@ static bool worker_thread_get_any_listener_task_due_I(struct worker_thread_s* wo
     }
     return false;
 }
+#endif
+
+#if CH_DBG_ENABLE_CHECKS && DBG_INIT_ORDER_CHECKS
+static struct worker_thread_s* worker_thread_init_check_head;
+static struct worker_thread_timer_task_s* worker_thread_timer_task_init_check_head;
+
+static void worker_thread_dbg_set_worker_thread_initialized_I(struct worker_thread_s* worker_thread) {
+    LINKED_LIST_APPEND(struct worker_thread_s, init_check_next, worker_thread_init_check_head, worker_thread);
+}
+
+static void worker_thread_dbg_set_worker_thread_initialized(struct worker_thread_s* worker_thread) {
+    chSysLock();
+    worker_thread_dbg_set_worker_thread_initialized_I(worker_thread);
+    chSysUnlock();
+}
+
+static void worker_thread_dbg_check_worker_thread_initialized_I(struct worker_thread_s* worker_thread) {
+    bool result;
+    LINKED_LIST_FIND(struct worker_thread_s, init_check_next, worker_thread_init_check_head, worker_thread, result)
+    chDbgCheck(result);
+}
+
+static void worker_thread_dbg_check_worker_thread_initialized(struct worker_thread_s* worker_thread) {
+    chSysLock();
+    worker_thread_dbg_check_worker_thread_initialized_I(worker_thread);
+    chSysUnlock();
+}
+
+static void worker_thread_dbg_set_timer_task_initialized_I(struct worker_thread_timer_task_s* timer_task) {
+    LINKED_LIST_APPEND(struct worker_thread_timer_task_s, init_check_next, worker_thread_timer_task_init_check_head, timer_task);
+}
+
+static void worker_thread_dbg_set_timer_task_initialized(struct worker_thread_timer_task_s* timer_task) {
+    chSysLock();
+    worker_thread_dbg_set_timer_task_initialized_I(timer_task);
+    chSysUnlock();
+}
+
+static void worker_thread_dbg_check_timer_task_initialized_I(struct worker_thread_timer_task_s* timer_task) {
+    bool result;
+    LINKED_LIST_FIND(struct worker_thread_timer_task_s, init_check_next, worker_thread_timer_task_init_check_head, timer_task, result)
+    chDbgCheck(result);
+}
+
+static void worker_thread_dbg_check_timer_task_initialized(struct worker_thread_timer_task_s* timer_task) {
+    chSysLock();
+    worker_thread_dbg_check_timer_task_initialized_I(timer_task);
+    chSysUnlock();
+}
+#else
+static void worker_thread_dbg_set_worker_thread_initialized_I(struct worker_thread_s* worker_thread) {}
+static void worker_thread_dbg_set_worker_thread_initialized(struct worker_thread_s* worker_thread) {}
+static void worker_thread_dbg_check_worker_thread_initialized_I(struct worker_thread_s* worker_thread) {}
+static void worker_thread_dbg_check_worker_thread_initialized(struct worker_thread_s* worker_thread) {}
+static void worker_thread_dbg_set_timer_task_initialized_I(struct worker_thread_timer_task_s* timer_task) {}
+static void worker_thread_dbg_set_timer_task_initialized(struct worker_thread_timer_task_s* timer_task) {}
+static void worker_thread_dbg_check_timer_task_initialized_I(struct worker_thread_timer_task_s* timer_task) {}
+static void worker_thread_dbg_check_timer_task_initialized(struct worker_thread_timer_task_s* timer_task) {}
 #endif

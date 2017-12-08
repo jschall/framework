@@ -53,6 +53,9 @@ struct worker_thread_timer_task_s {
     systime_t timer_begin_systime;
     bool auto_repeat;
     struct worker_thread_timer_task_s* next;
+#if CH_DBG_ENABLE_CHECKS && DBG_INIT_ORDER_CHECKS
+    struct worker_thread_timer_task_s* init_check_next;
+#endif
 };
 
 #ifdef MODULE_PUBSUB_ENABLED
@@ -85,6 +88,9 @@ struct worker_thread_s {
 #ifdef MODULE_PUBSUB_ENABLED
     struct worker_thread_listener_task_s* listener_task_list_head;
     struct worker_thread_publisher_task_s* publisher_task_list_head;
+#endif
+#if CH_DBG_ENABLE_CHECKS && DBG_INIT_ORDER_CHECKS
+    struct worker_thread_s* init_check_next;
 #endif
 };
 
