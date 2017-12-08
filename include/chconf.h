@@ -4,6 +4,10 @@
 
 #define _CHIBIOS_RT_CONF_
 
+#ifndef DBG_INIT_ORDER_CHECKS
+#define DBG_INIT_ORDER_CHECKS               FALSE
+#endif
+
 /**
  * @brief   OS optimization.
  * @details If enabled then time efficient rather than space efficient code

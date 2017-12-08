@@ -15,3 +15,7 @@
 #if !CH_DBG_ENABLE_STACK_CHECK
 #warning Consider enabling CH_DBG_ENABLE_STACK_CHECK in framework_conf.h.
 #endif
+
+#if !DBG_INIT_ORDER_CHECKS
+#warning Consider enabling DBG_INIT_ORDER_CHECKS in framework_conf.h.
+#endif
