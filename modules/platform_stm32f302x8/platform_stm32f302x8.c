@@ -7,7 +7,7 @@
  * @details This initialization must be performed just after stack setup
  *          and before any other initialization.
  */
-void __early_init(void) {
+void board_clock_init(void) {
     stm32_clock_init();
 }
 

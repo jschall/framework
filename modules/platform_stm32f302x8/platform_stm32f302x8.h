@@ -16,6 +16,7 @@ extern uint8_t _param2_flash_sec;
 extern uint8_t _param2_flash_sec_end;
 
 void board_get_unique_id(uint8_t* buf, uint8_t len);
+void board_clock_init(void);
 
 #if !defined(_FROM_ASM_)
 void boardInit(void);

@@ -1,15 +1,17 @@
 #include "platform_stm32f427.h"
 #include <hal.h>
 #include <string.h>
+#include <common/ctor.h>
+
+void board_clock_init() {
+    stm32_clock_init();
+}
 
 /**
  * @brief   Early initialization code.
  * @details This initialization must be performed just after stack setup
  *          and before any other initialization.
  */
-void __early_init(void) {
-    stm32_clock_init();
-}
 
 void board_get_unique_id(uint8_t* buf, uint8_t len) {
     uint32_t unique_id_uint32[3];
