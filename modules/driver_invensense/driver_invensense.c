@@ -58,8 +58,8 @@ bool invensense_init(struct invensense_instance_s* instance, uint8_t spi_idx, ui
     invensense_write8(instance, INVENSENSE_REG_ACCEL_CONFIG2, 1<<3);
 
     // Enable and reset FIFO
-//     invensense_write8(instance, INVENSENSE_REG_FIFO_EN, 0x18)
-//     invensense_write8(instance, INVENSENSE_REG_USER_CTRL, 1<<6 | 1<<2);
+    invensense_write8(instance, INVENSENSE_REG_FIFO_EN, 0x18)
+    invensense_write8(instance, INVENSENSE_REG_USER_CTRL, 1<<6 | 1<<2);
 }
 
 size_t invensense_get_fifo_count(struct invensense_instance_s* instance) {
