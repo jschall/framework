@@ -42,6 +42,8 @@ bool invensense_init(struct invensense_instance_s* instance, uint8_t spi_idx, ui
         }
     }
 
+    chThdSleep(MS2ST(10));
+
     // Reset value of CONFIG is 0x80 - datasheet instructs us to clear bit 7
     invensense_write8(instance, INVENSENSE_REG_CONFIG, 0);
 
@@ -58,12 +60,22 @@ bool invensense_init(struct invensense_instance_s* instance, uint8_t spi_idx, ui
     invensense_write8(instance, INVENSENSE_REG_ACCEL_CONFIG2, 1<<3);
 
     // Enable and reset FIFO
-    invensense_write8(instance, INVENSENSE_REG_FIFO_EN, 0x18)
+    invensense_write8(instance, INVENSENSE_REG_FIFO_EN, 0x18);
     invensense_write8(instance, INVENSENSE_REG_USER_CTRL, 1<<6 | 1<<2);
+    return true;
 }
 
 size_t invensense_get_fifo_count(struct invensense_instance_s* instance) {
     return invensense_read16(instance, INVENSENSE_REG_FIFO_COUNTH);
+}
+
+size_t invensense_read_fifo(struct invensense_instance_s* instance, void* buf) {
+    size_t count = invensense_get_fifo_count(instance);
+    invensense_read(instance, INVENSENSE_REG_FIFO_R_W, count, buf);
+    for (size_t i=0; i<count/2; i++) {
+        ((uint16_t*)buf)[i] = be16_to_cpu(((uint16_t*)buf)[i]);
+    }
+    return count;
 }
 
 static uint8_t invensense_read8(struct invensense_instance_s* instance, uint8_t reg) {
@@ -79,7 +91,7 @@ static uint16_t invensense_read16(struct invensense_instance_s* instance, uint8_
 }
 
 static void invensense_write8(struct invensense_instance_s* instance, uint8_t reg, uint8_t value) {
-    invensense_write(instance, reg, sizeof(value), value);
+    invensense_write(instance, reg, sizeof(value), &value);
 }
 
 static void invensense_read(struct invensense_instance_s* instance, uint8_t reg, size_t len, void* buf) {
@@ -113,9 +125,5 @@ static uint8_t invensense_get_whoami(enum invensense_imu_type_t imu_type) {
         case INVENSENSE_IMU_TYPE_ICM20602:
             return 0x12;
     }
+    return 0;
 }
-
-
-
-
-
