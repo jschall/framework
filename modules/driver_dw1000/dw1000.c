@@ -3,6 +3,7 @@
 #include <hal.h>
 #include <modules/timing/timing.h>
 #include <modules/uavcan/uavcan.h>
+#include <modules/uavcan_debug/uavcan_debug.h>
 #include <common/bswap.h>
 
 #ifndef DW1000_LEDS_ENABLED
@@ -62,7 +63,7 @@ void dw1000_init(struct dw1000_instance_s* instance, uint8_t spi_idx, uint32_t s
     instance->reset_line = reset_line;
     instance->config.prf = DW1000_PRF_64MHZ;
     instance->config.preamble = DW1000_PREAMBLE_128;
-    instance->config.channel = DW1000_CHANNEL_5;
+    instance->config.channel = DW1000_CHANNEL_7;
     instance->config.data_rate = DW1000_DATA_RATE_6_8M;
     instance->config.pcode = dw1000_conf_get_default_pcode(instance->config);
     instance->config.ant_delay = ant_delay;
@@ -78,6 +79,17 @@ void dw1000_init(struct dw1000_instance_s* instance, uint8_t spi_idx, uint32_t s
 
     // DW1000 User Manual Section 2.5.5.11
     dw1000_load_ldotune(instance);
+
+    // Load temperature and voltage sensor calibrations
+    {
+        uint8_t buf[2];
+        dw1000_otp_read(instance, 0x008, 2, buf);
+        instance->v_meas_3v3 = buf[0];
+        instance->v_meas_3v7 = buf[1];
+        dw1000_otp_read(instance, 0x009, 1, buf);
+        instance->t_meas_23c = buf[0];
+//         uavcan_send_debug_msg(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "", "%02X", buf[0]);
+    }
 
     // Switch back to normal clock
     dw1000_clock_enable_all_seq(instance);
@@ -622,6 +634,22 @@ void dw1000_set_ant_delay(struct dw1000_instance_s* instance, uint16_t ant_delay
     dw1000_write16(instance, 0x2E, 0x1804, ant_delay);    
 }
 
+float dw1000_get_temp(struct dw1000_instance_s* instance) {
+    uint8_t sar_ltemp;
+    dw1000_write8(instance, 0x28, 0x11, 0x80);
+    dw1000_write8(instance, 0x28, 0x12, 0x0A);
+    dw1000_write8(instance, 0x28, 0x12, 0x0F);
+    dw1000_write8(instance, 0x2A, 0x00, 0x00);
+    dw1000_write8(instance, 0x2A, 0x00, 0x01);
+    chThdSleep(MS2ST(1));
+    dw1000_read(instance, 0x2A, 0x04, sizeof(uint8_t), &sar_ltemp);
+    dw1000_write8(instance, 0x2A, 0x00, 0x00);
+
+//     uavcan_send_debug_msg(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "", "%02X", sar_ltemp);
+
+    return (sar_ltemp - instance->t_meas_23c)*1.14f + 23;
+}
+
 static void dw1000_clock_force_sys_xti(struct dw1000_instance_s* instance) {
     if (!instance) {
         return;
@@ -817,6 +845,6 @@ static void dw1000_otp_read(struct dw1000_instance_s* instance, uint16_t otp_add
     dw1000_write16(instance, 0x2D, 0x04, otp_addr);
     dw1000_write8(instance, 0x2D, 0x06, 0x03);
     dw1000_write8(instance, 0x2D, 0x06, 0x01);
-    dw1000_read(instance, 0x2A, 0x04, otp_field_len, buf);
+    dw1000_read(instance, 0x2A, 0x0A, otp_field_len, buf);
     dw1000_write8(instance, 0x2D, 0x06, 0x00);
 }

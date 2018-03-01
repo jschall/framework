@@ -24,7 +24,15 @@ float dw1000_get_fp_rssi_est(struct dw1000_instance_s* instance, uint16_t fp_amp
     float F2 = fp_ampl2;
     float F3 = fp_ampl3;
     float N = rxpacc;
-    return 10.0f*log10f((SQ(F1) + SQ(F2) + SQ(F3)) / SQ(N)) - A;
+    float estRxPwr = 10.0f*log10f((SQ(F1) + SQ(F2) + SQ(F3)) / SQ(N)) - A;
+
+    if (estRxPwr > -88.0f) {
+        // approximation of Fig. 22 in user manual for dbm correction
+        float corrFac = (instance->config.prf == DW1000_PRF_16MHZ) ? 2.3334f : 1.1667f;
+        estRxPwr += (estRxPwr+88)*corrFac;
+    }
+
+    return estRxPwr;
 }
 
 float dw1000_get_rssi_est(struct dw1000_instance_s* instance, uint16_t cir_pwr, uint16_t rxpacc) {
@@ -39,6 +47,7 @@ float dw1000_get_rssi_est(struct dw1000_instance_s* instance, uint16_t cir_pwr, 
         float corrFac = (instance->config.prf == DW1000_PRF_16MHZ) ? 2.3334f : 1.1667f;
         estRxPwr += (estRxPwr+88)*corrFac;
     }
+
     return estRxPwr;
 }
 
@@ -90,7 +99,7 @@ int64_t dw1000_correct_tstamp(struct dw1000_instance_s* instance, float estRxPwr
     float rangeBias = rangeBiasLow+(rxPowerBase-rxPowerBaseLow)*(rangeBiasHigh-rangeBiasLow);
     // range bias [mm] to timestamp modification value conversion
     // apply correction
-    ts = dw1000_wrap_timestamp(ts - (int16_t)(rangeBias*DW1000_METERS_TO_TIME*0.001f));
+    ts = dw1000_wrap_timestamp(ts - (int32_t)(rangeBias*DW1000_METERS_TO_TIME*0.001f));
 
     return ts;
 }
