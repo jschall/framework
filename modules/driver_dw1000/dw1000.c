@@ -115,6 +115,7 @@ static void dw1000_config(struct dw1000_instance_s* instance) {
         sys_cfg.HIRQ_POL = 1;
         sys_cfg.RXAUTR = 1;
         sys_cfg.DIS_STXP = 1;
+        sys_cfg.DIS_DRXB = 1;
         if (!instance->config.std_data_length) {
             sys_cfg.PHR_MODE = 0x3; //setup to non standard data length to vary between 0-1023
         }
@@ -344,6 +345,24 @@ void dw1000_rx_enable(struct dw1000_instance_s* instance) {
     dw1000_write(instance, DW1000_SYSTEM_CONTROL_REGISTER_FILE, 0, sizeof(sys_ctrl), &sys_ctrl);
 }
 
+static void dw1000_enable_acc_clock(struct dw1000_instance_s* instance) {
+    uint32_t pmsc_ctrl0;
+    dw1000_read(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+    
+    pmsc_ctrl0 |= (1<<6)|(1<<15);
+    
+    dw1000_write(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+}
+
+static void dw1000_disable_acc_clock(struct dw1000_instance_s* instance) {
+    uint32_t pmsc_ctrl0;
+    dw1000_read(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+    
+    pmsc_ctrl0 &= ~(uint32_t)((1<<6)|(1<<15));
+    
+    dw1000_write(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+}
+
 void dw1000_rx_softreset(struct dw1000_instance_s* instance) {
     uint32_t pmsc_ctrl0;
     dw1000_read(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
@@ -355,6 +374,17 @@ void dw1000_rx_softreset(struct dw1000_instance_s* instance) {
     dw1000_write(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
 }
 
+uint16_t dw1000_get_fp_index(struct dw1000_instance_s* instance) {
+    uint16_t ret;
+    dw1000_read(instance, 0x15, 0x05, 2, &ret);
+    return ret;
+}
+
+void dw1000_read_cir(struct dw1000_instance_s* instance, void* cir_ret) {
+    dw1000_enable_acc_clock(instance);
+    dw1000_read(instance, 0x25, 0, 4065, cir_ret);
+    dw1000_disable_acc_clock(instance);
+}
 
 struct dw1000_rx_frame_info_s dw1000_receive(struct dw1000_instance_s* instance, uint32_t buf_len, void* buf) {
     struct dw1000_rx_frame_info_s ret;
