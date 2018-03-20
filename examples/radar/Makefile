@@ -1,6 +1,9 @@
 CSRC = $(shell find src -name "*.c")
 INCDIR = ./include
 
+USE_PROCESS_STACKSIZE = 20480
+USE_EXCEPTIONS_STACKSIZE = 20480
+
 MODULES_ENABLED = \
 chibios_sys_init \
 chibios_hal_init \
@@ -27,7 +30,13 @@ uavcan_param_interface \
 driver_dw1000 \
 uavcan_debug
 
+UDEFS += -DCAN_TX_QUEUE_LEN=128
+
+VENDOR_DSDL_NAMESPACE_DIRS = ./dsdl/com
+
 MESSAGES_ENABLED = \
-uavcan.protocol.debug.LogMessage
+uavcan.protocol.debug.LogMessage \
+com.matternet.equipment.uwb.Radar \
+com.matternet.equipment.uwb.Complex16
 
 include ../../include.mk

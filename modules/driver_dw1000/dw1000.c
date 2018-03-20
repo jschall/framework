@@ -61,7 +61,7 @@ void dw1000_init(struct dw1000_instance_s* instance, uint8_t spi_idx, uint32_t s
     spi_device_init(&instance->spi_dev, spi_idx, select_line, 3000000, 8, 0);
     instance->reset_line = reset_line;
     instance->config.prf = DW1000_PRF_64MHZ;
-    instance->config.preamble = DW1000_PREAMBLE_128;
+    instance->config.preamble = DW1000_PREAMBLE_1024;
     instance->config.channel = DW1000_CHANNEL_7;
     instance->config.data_rate = DW1000_DATA_RATE_6_8M;
     instance->config.pcode = dw1000_conf_get_default_pcode(instance->config);
@@ -346,21 +346,23 @@ void dw1000_rx_enable(struct dw1000_instance_s* instance) {
 }
 
 static void dw1000_enable_acc_clock(struct dw1000_instance_s* instance) {
-    uint32_t pmsc_ctrl0;
-    dw1000_read(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+    uint16_t pmsc_ctrl0;
+    dw1000_read(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 2, &pmsc_ctrl0);
     
-    pmsc_ctrl0 |= (1<<6)|(1<<15);
+    pmsc_ctrl0 &= 0xffb3;
+    pmsc_ctrl0 |= 0x8048;
     
-    dw1000_write(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+    dw1000_write(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 2, &pmsc_ctrl0);
 }
 
 static void dw1000_disable_acc_clock(struct dw1000_instance_s* instance) {
-    uint32_t pmsc_ctrl0;
-    dw1000_read(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+    uint16_t pmsc_ctrl0;
+    dw1000_read(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 2, &pmsc_ctrl0);
     
-    pmsc_ctrl0 &= ~(uint32_t)((1<<6)|(1<<15));
+    pmsc_ctrl0 &= 0xffb3;
+    pmsc_ctrl0 &= 0x7fff;
     
-    dw1000_write(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 4, &pmsc_ctrl0);
+    dw1000_write(instance, DW1000_POWER_MANAGEMENT_AND_SYSTEM_CONTROL_FILE, 0, 2, &pmsc_ctrl0);
 }
 
 void dw1000_rx_softreset(struct dw1000_instance_s* instance) {
