@@ -67,5 +67,5 @@ RUN_AFTER(UAVCAN_INIT) {
     dw1000_init(&instance, 4, BOARD_PAL_LINE_SPI_UWB_CS, BOARD_PAL_LINE_UWB_NRST);
     dw1000_rx_enable(&instance);
     dw1000_set_tx_power(&instance, 0x85);
-    worker_thread_add_timer_task(&WT, &uwb_task, uwb_task_func, NULL, MS2ST(param_receive ? 10 : 500), true);
+    worker_thread_add_timer_task(&WT, &uwb_task, uwb_task_func, NULL, MS2ST(param_receive ? 10 : 250), true);
 }

@@ -30,9 +30,11 @@ def radar_cb(event):
     plt.subplot(211)
     plt.cla()
     plt.plot(dist, ampl, alpha=0.3)
+    plt.ylim(0,30000)
     plt.subplot(212)
     plt.cla()
     plt.plot(dist, [wrap_pi(x-phase[1]) for x in phase], alpha=0.3)
+    plt.ylim(-math.pi,math.pi)
     plt.pause(0.0001)
 
 
