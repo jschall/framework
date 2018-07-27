@@ -19,8 +19,10 @@ uavcan_getnodeinfo_server \
 uavcan_beginfirmwareupdate_server \
 uavcan_allocatee \
 uavcan_restart \
+freemem_check \
+spi_device \
 uavcan_debug \
-freemem_check
+driver_invensense
 
 MESSAGES_ENABLED = \
 uavcan.protocol.debug.LogMessage

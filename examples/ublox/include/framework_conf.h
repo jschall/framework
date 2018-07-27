@@ -4,9 +4,6 @@
 // Configure worker threads
 //
 
-#define HAL_USE_UART                TRUE
-#define UART_USE_WAIT               TRUE
-
 #define TIMING_WORKER_THREAD                            lpwork_thread
 #define UAVCAN_NODESTATUS_PUBLISHER_WORKER_THREAD       lpwork_thread
 #define CAN_AUTOBAUD_WORKER_THREAD                      lpwork_thread
