@@ -19,7 +19,8 @@ uavcan_getnodeinfo_server \
 uavcan_beginfirmwareupdate_server \
 uavcan_allocatee \
 uavcan_restart \
-freemem_check
+freemem_check \
+usb_serial
 
 MESSAGES_ENABLED = \
 uavcan.protocol.debug.LogMessage
