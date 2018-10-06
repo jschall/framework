@@ -78,6 +78,10 @@ size_t invensense_read_fifo(struct invensense_instance_s* instance, void* buf) {
     return count;
 }
 
+uint8_t invensense_read_int_status(struct invensense_instance_s* instance) {
+    return invensense_read8(instance, 0x3A);
+}
+
 static uint8_t invensense_read8(struct invensense_instance_s* instance, uint8_t reg) {
     uint8_t ret;
     invensense_read(instance, reg, sizeof(ret), &ret);

@@ -19,3 +19,4 @@ struct invensense_instance_s {
 bool invensense_init(struct invensense_instance_s* instance, uint8_t spi_idx, uint32_t select_line, enum invensense_imu_type_t imu_type);
 size_t invensense_get_fifo_count(struct invensense_instance_s* instance);
 size_t invensense_read_fifo(struct invensense_instance_s* instance, void* buf);
+uint8_t invensense_read_int_status(struct invensense_instance_s* instance);

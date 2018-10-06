@@ -1,5 +1,8 @@
 #pragma once
 
+#define HAL_USE_UART TRUE
+#define UART_USE_WAIT TRUE
+
 //
 // Configure worker threads
 //
