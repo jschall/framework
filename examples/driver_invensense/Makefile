@@ -22,9 +22,11 @@ uavcan_restart \
 freemem_check \
 spi_device \
 uavcan_debug \
-driver_invensense
+driver_invensense \
+stack_measurement
 
 MESSAGES_ENABLED = \
-uavcan.protocol.debug.LogMessage
+uavcan.protocol.debug.LogMessage \
+uavcan.equipment.ahrs.RawIMU
 
 include ../../include.mk
