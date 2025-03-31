@@ -21,7 +21,8 @@ can \
 can_autobaud \
 uavcan \
 uavcan_nodestatus_publisher \
-uavcan_allocatee
+uavcan_allocatee \
+usb_slcan
 
 MESSAGES_ENABLED = \
 uavcan.protocol.GetNodeInfo \

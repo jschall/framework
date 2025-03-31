@@ -75,6 +75,7 @@ static void process_slcan_cmd(struct slcan_instance_s* instance, size_t cmd_len)
     switch(instance->cmd_buf[0]) {
         case 'C': // Close CAN channel
             can_set_filtering_enabled(instance->can_instance, true);
+            // fall through
         case 'S': // Set bitrate
         case 'M':
         case 'm': {
