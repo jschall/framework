@@ -6,6 +6,10 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <hal.h>
+#include <chprintf.h>
+#include <memstreams.h>
+#include <stdarg.h>
 
 #ifndef PARAM_MAX_NUM_PARAMS
 #define PARAM_MAX_NUM_PARAMS 50
@@ -113,6 +117,226 @@ void param_register(const struct param_descriptor_header_s* param_descriptor_hea
     }
 
     param_release();
+}
+
+static char* param_create_name(const char *name_fmt, va_list ap) {
+    char name_temp[93];
+
+    chvsnprintf(name_temp, sizeof(name_temp), name_fmt, ap);
+
+    size_t name_len = strnlen(name_temp, sizeof(name_temp));
+
+    if (name_len > 92) {
+        chSysHalt("paramNameTooLong");
+    }
+
+    void* mem = chCoreAlloc(name_len+1);
+
+    if(!mem) {
+        chSysHalt("coreAllocFail");
+    }
+
+    memcpy(mem, name_temp, name_len+1);
+
+    return (char*)mem;
+}
+
+const struct param_descriptor_header_s* param_create_float(float* cached_value, float default_val, float min_val, float max_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_float32_s* descriptor = (struct param_descriptor_float32_s*)chCoreAlloc(sizeof(struct param_descriptor_float32_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_float32_s){{PARAM_TYPE_FLOAT32,0,name,cached_value}, default_val, min_val, max_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_uint8(uint8_t* cached_value, uint8_t default_val, uint8_t min_val, uint8_t max_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_uint8_s* descriptor = (struct param_descriptor_uint8_s*)chCoreAlloc(sizeof(struct param_descriptor_uint8_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_uint8_s){{PARAM_TYPE_UINT8,0,name,cached_value}, default_val, min_val, max_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_uint16(uint16_t* cached_value, uint16_t default_val, uint16_t min_val, uint16_t max_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_uint16_s* descriptor = (struct param_descriptor_uint16_s*)chCoreAlloc(sizeof(struct param_descriptor_uint16_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_uint16_s){{PARAM_TYPE_UINT16,0,name,cached_value}, default_val, min_val, max_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_uint32(uint32_t* cached_value, uint32_t default_val, uint32_t min_val, uint32_t max_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_uint32_s* descriptor = (struct param_descriptor_uint32_s*)chCoreAlloc(sizeof(struct param_descriptor_uint32_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_uint32_s){{PARAM_TYPE_UINT32,0,name,cached_value}, default_val, min_val, max_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_int8(int8_t* cached_value, int8_t default_val, int8_t min_val, int8_t max_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_int8_s* descriptor = (struct param_descriptor_int8_s*)chCoreAlloc(sizeof(struct param_descriptor_int8_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_int8_s){{PARAM_TYPE_INT8,0,name,cached_value}, default_val, min_val, max_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_int16(int16_t* cached_value, int16_t default_val, int16_t min_val, int16_t max_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_int16_s* descriptor = (struct param_descriptor_int16_s*)chCoreAlloc(sizeof(struct param_descriptor_int16_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_int16_s){{PARAM_TYPE_INT16,0,name,cached_value}, default_val, min_val, max_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_int32(int32_t* cached_value, int32_t default_val, int32_t min_val, int32_t max_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_int32_s* descriptor = (struct param_descriptor_int32_s*)chCoreAlloc(sizeof(struct param_descriptor_int32_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_int32_s){{PARAM_TYPE_INT32,0,name,cached_value}, default_val, min_val, max_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_bool(bool* cached_value, bool default_val, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_bool_s* descriptor = (struct param_descriptor_bool_s*)chCoreAlloc(sizeof(struct param_descriptor_bool_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_bool_s){{PARAM_TYPE_BOOL,default_val,name,cached_value}};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
+}
+
+const struct param_descriptor_header_s* param_create_string(char* cached_value, const char* default_val, uint8_t max_len, const char *name_fmt, ...) {
+    param_acquire();
+
+    va_list ap;
+    va_start(ap,name_fmt);
+    char* name = param_create_name(name_fmt, ap);
+    va_end(ap);
+
+   struct param_descriptor_string_s* descriptor = (struct param_descriptor_string_s*)chCoreAlloc(sizeof(struct param_descriptor_string_s));
+
+    if(!descriptor) {
+        chSysHalt("coreAllocFail");
+    }
+
+    *descriptor = (struct param_descriptor_string_s){{PARAM_TYPE_STRING,0,name,cached_value},max_len,default_val};
+
+    param_register(&descriptor->header);
+
+    param_release();
+    return &descriptor->header;
 }
 
 bool param_erase(void) {

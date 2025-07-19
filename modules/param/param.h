@@ -144,6 +144,16 @@ struct __attribute__((packed)) param_descriptor_bool_s {
     struct param_descriptor_header_s header;
 };
 
+const struct param_descriptor_header_s* param_create_float(float* cached_value, float default_val, float min_val, float max_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_uint8(uint8_t* cached_value, uint8_t default_val, uint8_t min_val, uint8_t max_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_uint16(uint16_t* cached_value, uint16_t default_val, uint16_t min_val, uint16_t max_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_uint32(uint32_t* cached_value, uint32_t default_val, uint32_t min_val, uint32_t max_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_int8(int8_t* cached_value, int8_t default_val, int8_t min_val, int8_t max_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_int16(int16_t* cached_value, int16_t default_val, int16_t min_val, int16_t max_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_int32(int32_t* cached_value, int32_t default_val, int32_t min_val, int32_t max_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_bool(bool* cached_value, bool default_val, const char *name_fmt, ...);
+const struct param_descriptor_header_s* param_create_string(char* cached_value, const char* default_val, uint8_t max_len, const char *name_fmt, ...);
+
 void param_acquire(void);
 void param_release(void);
 void param_register(const struct param_descriptor_header_s* param_descriptor_header);
