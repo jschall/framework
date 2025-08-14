@@ -26,6 +26,8 @@ uavcan_debug \
 driver_ms5611
 
 MESSAGES_ENABLED = \
-uavcan.protocol.debug.LogMessage
+uavcan.protocol.debug.LogMessage \
+uavcan.equipment.air_data.StaticPressure \
+uavcan.equipment.air_data.StaticTemperature
 
 include ../../include.mk

@@ -1,4 +1,5 @@
 #include <modules/driver_invensense/driver_invensense.h>
+#include <board.h>
 #include <modules/worker_thread/worker_thread.h>
 #include <modules/uavcan_debug/uavcan_debug.h>
 
@@ -11,7 +12,13 @@ static struct worker_thread_timer_task_s invensense_test_task;
 static void invensense_test_task_func(struct worker_thread_timer_task_s* task);
 
 RUN_AFTER(INIT_END) {
+#if defined(BOARD_PAL_LINE_SPI_UWB_CS)
+    invensense_init(&invensense, 3, BOARD_PAL_LINE_SPI_UWB_CS, INVENSENSE_IMU_TYPE_ICM20602);
+#elif defined(BOARD_PAL_LINE_SPI3_ICM_CS)
     invensense_init(&invensense, 3, BOARD_PAL_LINE_SPI3_ICM_CS, INVENSENSE_IMU_TYPE_ICM20602);
+#else
+#error "No suitable SPI CS line defined for invensense test"
+#endif
     worker_thread_add_timer_task(&WT, &invensense_test_task, invensense_test_task_func, NULL, chTimeMS2I(1), true);
 }
 
@@ -26,6 +33,7 @@ static struct {
 } buf[72];
 
 static void invensense_test_task_func(struct worker_thread_timer_task_s* task) {
+    (void)task;
     size_t buf_count = invensense_read_fifo(&invensense, buf)/14;
 
     uavcan_send_debug_keyvalue("gx", buf[buf_count-1].gyro_x);

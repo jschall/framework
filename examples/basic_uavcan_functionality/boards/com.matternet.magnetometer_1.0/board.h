@@ -1,6 +1,8 @@
 #pragma once
 
+#if !defined(_FROM_ASM_)
 #include <stdint.h>
+#endif
 #include <modules/platform_stm32f302x8/platform_stm32f302x8.h>
 
 #define BOARD_CONFIG_HW_NAME "com.matternet.magnetometer"

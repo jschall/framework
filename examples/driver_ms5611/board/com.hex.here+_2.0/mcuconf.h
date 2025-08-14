@@ -33,6 +33,9 @@
 #define STM32_USB_CLOCK_REQUIRED            FALSE
 #define STM32_USBPRE                        STM32_USBPRE_DIV1P5
 
+/* Disable USB for this example to avoid peripheral assignment requirements */
+#define HAL_USE_USB                          FALSE
+
 #define STM32_SPI_USE_SPI1                  FALSE
 #define STM32_SPI_USE_SPI2                  FALSE
 #define STM32_SPI_USE_SPI3                  TRUE
