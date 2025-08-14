@@ -87,19 +87,20 @@ else
 endif
 ASRC      := $(ACSRC) $(ACPPSRC)
 TSRC      := $(TCSRC) $(TCPPSRC)
-SRCPATHS  := $(sort $(dir $(ASMXSRC)) $(dir $(ASMSRC)) $(dir $(ASRC)) $(dir $(TSRC)))
+# Include resolved source lists from included mk files if available
+SRCPATHS  := $(sort $(dir $(ASMXSRC)) $(dir $(ASMSRC)) $(dir $(ASRC)) $(dir $(TSRC)) $(ALLCSRC) $(ALLXASMSRC))
 
 # Various directories
 OBJDIR    := $(BUILDDIR)/obj
 LSTDIR    := $(BUILDDIR)/lst
 
 # Object files groups
-ACOBJS    := $(addprefix $(OBJDIR)/, $(notdir $(ACSRC:.c=.o)))
-ACPPOBJS  := $(addprefix $(OBJDIR)/, $(notdir $(ACPPSRC:.cpp=.o)))
-TCOBJS    := $(addprefix $(OBJDIR)/, $(notdir $(TCSRC:.c=.o)))
-TCPPOBJS  := $(addprefix $(OBJDIR)/, $(notdir $(TCPPSRC:.cpp=.o)))
-ASMOBJS   := $(addprefix $(OBJDIR)/, $(notdir $(ASMSRC:.s=.o)))
-ASMXOBJS  := $(addprefix $(OBJDIR)/, $(notdir $(ASMXSRC:.S=.o)))
+ACOBJS    := $(patsubst %.c,$(OBJDIR)/%.o,$(ACSRC))
+ACPPOBJS  := $(patsubst %.cpp,$(OBJDIR)/%.o,$(ACPPSRC))
+TCOBJS    := $(patsubst %.c,$(OBJDIR)/%.o,$(TCSRC))
+TCPPOBJS  := $(patsubst %.cpp,$(OBJDIR)/%.o,$(TCPPSRC))
+ASMOBJS   := $(patsubst %.s,$(OBJDIR)/%.o,$(ASMSRC))
+ASMXOBJS  := $(patsubst %.S,$(OBJDIR)/%.o,$(ASMXSRC))
 OBJS	  := $(ASMXOBJS) $(ASMOBJS) $(ACOBJS) $(TCOBJS) $(ACPPOBJS) $(TCPPOBJS)
 
 # Paths
@@ -117,10 +118,10 @@ LIBS      := $(DLIBS) $(ULIBS)
 # Various settings
 MCFLAGS   := -mcpu=$(MCU)
 ODFLAGS	  = -x --syms
-ASFLAGS   = $(MCFLAGS) $(OPT) -Wa,-amhls=$(LSTDIR)/$(notdir $(<:.s=.lst)) $(ADEFS)
-ASXFLAGS  = $(MCFLAGS) $(OPT) -Wa,-amhls=$(LSTDIR)/$(notdir $(<:.S=.lst)) $(ADEFS)
-CFLAGS    = $(MCFLAGS) $(OPT) $(COPT) $(CWARN) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.c=.lst)) $(DEFS)
-CPPFLAGS  = $(MCFLAGS) $(OPT) $(CPPOPT) $(CPPWARN) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.cpp=.lst)) $(DEFS)
+ASFLAGS   = $(MCFLAGS) $(OPT) $(ADEFS)
+ASXFLAGS  = $(MCFLAGS) $(OPT) $(ADEFS)
+CFLAGS    = $(MCFLAGS) $(OPT) $(COPT) $(CWARN) $(DEFS) -include board.h
+CPPFLAGS  = $(MCFLAGS) $(OPT) $(CPPOPT) $(CPPWARN) $(DEFS) -include board.h
 LDFLAGS   = $(MCFLAGS) $(OPT) -nostartfiles $(LLIBDIR) -Wl,-Map=$(BUILDDIR)/$(PROJECT).map,--cref,--no-warn-mismatch,--library-path=$(RULESPATH)/ld,--script=$(LDSCRIPT)$(LDOPT)
 
 # Thumb interwork enabled only if needed because it kills performance.
@@ -191,54 +192,66 @@ $(LSTDIR):
 $(ACPPOBJS) : $(OBJDIR)/%.o : %.cpp Makefile
 ifeq ($(USE_VERBOSE_COMPILE),yes)
 	@echo
+	@mkdir -p $(dir $@)
 	$(CPPC) -c $(CPPFLAGS) $(AOPT) -I. $(IINCDIR) $< -o $@
 else
 	@echo Compiling $(<F)
+	@mkdir -p $(dir $@)
 	@$(CPPC) -c $(CPPFLAGS) $(AOPT) -I. $(IINCDIR) $< -o $@
 endif
 
 $(TCPPOBJS) : $(OBJDIR)/%.o : %.cpp Makefile
 ifeq ($(USE_VERBOSE_COMPILE),yes)
 	@echo
+	@mkdir -p $(dir $@)
 	$(CPPC) -c $(CPPFLAGS) $(TOPT) -I. $(IINCDIR) $< -o $@
 else
 	@echo Compiling $(<F)
+	@mkdir -p $(dir $@)
 	@$(CPPC) -c $(CPPFLAGS) $(TOPT) -I. $(IINCDIR) $< -o $@
 endif
 
 $(ACOBJS) : $(OBJDIR)/%.o : %.c Makefile
 ifeq ($(USE_VERBOSE_COMPILE),yes)
 	@echo
+	@mkdir -p $(dir $@)
 	$(CC) -c $(CFLAGS) $(AOPT) -I. $(IINCDIR) $< -o $@
 else
 	@echo Compiling $(<F)
+	@mkdir -p $(dir $@)
 	@$(CC) -c $(CFLAGS) $(AOPT) -I. $(IINCDIR) $< -o $@
 endif
 
 $(TCOBJS) : $(OBJDIR)/%.o : %.c Makefile
 ifeq ($(USE_VERBOSE_COMPILE),yes)
 	@echo
+	@mkdir -p $(dir $@)
 	$(CC) -c $(CFLAGS) $(TOPT) -I. $(IINCDIR) $< -o $@
 else
 	@echo Compiling $(<F)
+	@mkdir -p $(dir $@)
 	@$(CC) -c $(CFLAGS) $(TOPT) -I. $(IINCDIR) $< -o $@
 endif
 
 $(ASMOBJS) : $(OBJDIR)/%.o : %.s Makefile
 ifeq ($(USE_VERBOSE_COMPILE),yes)
 	@echo
+	@mkdir -p $(dir $@)
 	$(AS) -c $(ASFLAGS) -I. $(IINCDIR) $< -o $@
 else
 	@echo Compiling $(<F)
+	@mkdir -p $(dir $@)
 	@$(AS) -c $(ASFLAGS) -I. $(IINCDIR) $< -o $@
 endif
 
 $(ASMXOBJS) : $(OBJDIR)/%.o : %.S Makefile
 ifeq ($(USE_VERBOSE_COMPILE),yes)
 	@echo
+	@mkdir -p $(dir $@)
 	$(CC) -c $(ASXFLAGS) $(TOPT) -I. $(IINCDIR) $< -o $@
 else
 	@echo Compiling $(<F)
+	@mkdir -p $(dir $@)
 	@$(CC) -c $(ASXFLAGS) $(TOPT) -I. $(IINCDIR) $< -o $@
 endif
 

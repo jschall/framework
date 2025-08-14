@@ -4,7 +4,7 @@ all:
 
 ifeq ($(filter clean,$(MAKECMDGOALS)),)
   include $(FRAMEWORK_DIR)/mk/build.mk
-endif
-
+else
 clean:
 	rm -rf build .dep
+endif

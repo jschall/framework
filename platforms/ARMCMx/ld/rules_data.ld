@@ -50,11 +50,14 @@ SECTIONS
         PROVIDE(_data = .);
         _textdata_start = LOADADDR(.data);
         _data_start = .;
+        __textdata_base__ = LOADADDR(.data);
+        __data_base__ = .;
         *(.data)
         *(.data.*)
         *(.ramtext)
         . = ALIGN(4);
         PROVIDE(_edata = .);
+        __data_end__ = .;
         _data_end = .;
     } > DATA_RAM AT > DATA_RAM_LMA
 
@@ -62,11 +65,13 @@ SECTIONS
     {
         . = ALIGN(4);
         _bss_start = .;
+        __bss_base__ = .;
         *(.bss)
         *(.bss.*)
         *(COMMON)
         . = ALIGN(4);
         _bss_end = .;
+        __bss_end__ = .;
         PROVIDE(end = .);
     } > BSS_RAM
 

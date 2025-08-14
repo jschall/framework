@@ -133,19 +133,48 @@ ifneq ($(findstring stm32,$(TGT_MCU)),)
     include $(CHIBIOS)/os/hal/ports/STM32/STM32H7xx/platform.mk
     MCU  = cortex-m7
   endif
-  include $(CHIBIOS)/os/common/ports/ARMCMx/compilers/GCC/mk/port_v7m.mk
+  include $(CHIBIOS)/os/common/ports/ARMv7-M/compilers/GCC/mk/port.mk
 endif
 
 include $(CHIBIOS)/os/hal/hal.mk
-include $(CHIBIOS)/os/hal/osal/rt/osal.mk
+include $(CHIBIOS)/os/hal/osal/rt-nil/osal.mk
 include $(CHIBIOS)/os/rt/rt.mk
 include $(CHIBIOS)/os/hal/lib/streams/streams.mk
+
+# Device selection macros for ST headers, based on selected platform.
+ifneq ($(findstring stm32,$(TGT_MCU)),)
+  ifneq ($(findstring stm32f302,$(TGT_MCU)),)
+    UDEFS  += -DSTM32F302x8
+    UADEFS += -DSTM32F302x8
+  endif
+  ifneq ($(findstring stm32f405,$(TGT_MCU)),)
+    UDEFS  += -DSTM32F405xx
+    UADEFS += -DSTM32F405xx
+  endif
+  ifneq ($(findstring stm32f427,$(TGT_MCU)),)
+    UDEFS  += -DSTM32F427xx
+    UADEFS += -DSTM32F427xx
+  endif
+  ifneq ($(findstring stm32f767,$(TGT_MCU)),)
+    UDEFS  += -DSTM32F767xx
+    UADEFS += -DSTM32F767xx
+  endif
+  ifneq ($(findstring stm32h743,$(TGT_MCU)),)
+    UDEFS  += -DSTM32H743xx
+    UADEFS += -DSTM32H743xx
+  endif
+  ifneq ($(findstring stm32h753,$(TGT_MCU)),)
+    UDEFS  += -DSTM32H753xx
+    UADEFS += -DSTM32H753xx
+  endif
+endif
 
 INCDIR += $(CHIBIOS)/os/license \
           $(BOARD_INC)\
           $(ALLINC) \
           $(COMMON_INC) \
-          $(BUILDDIR)/modules
+          $(BUILDDIR)/modules \
+          $(FRAMEWORK_DIR)
 
 # C sources that can be compiled in ARM or THUMB mode depending on the global
 # setting.
