@@ -146,10 +146,15 @@ void can_driver_stm32_abort_tx_mailbox_I(void* ctx, uint8_t mb_idx) {
     switch(mb_idx) {
         case 0:
             instance->can->TSR = CAN_TSR_ABRQ0;
+            break;
         case 1:
             instance->can->TSR = CAN_TSR_ABRQ1;
+            break;
         case 2:
             instance->can->TSR = CAN_TSR_ABRQ2;
+            break;
+        default:
+            break;
     }
 }
 
