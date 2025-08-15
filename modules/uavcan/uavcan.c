@@ -442,7 +442,6 @@ static bool _uavcan_send(struct uavcan_instance_s* instance, const struct uavcan
     }
 
     can_enqueue_tx_frames(instance->can_instance, &tx_state.frame_list_head, timeout, completion_topic, CAN_FRAME_ORIGIN_LOCAL);
-
     return true;
 }
 

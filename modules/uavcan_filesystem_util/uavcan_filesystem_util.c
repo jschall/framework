@@ -3,6 +3,7 @@
 #include <modules/uavcan/uavcan.h>
 #include <modules/pubsub/pubsub.h>
 #include <uavcan.protocol.file.Read.h>
+#include <string.h>
 
 struct file_read_receive_handler_ctx_s {
     uint8_t transfer_id;
@@ -12,13 +13,14 @@ struct file_read_receive_handler_ctx_s {
 };
 
 static void file_read_receive_handler(size_t msg_size, const void* buf, void* ctx_p) {
+    (void)msg_size;
     const struct uavcan_deserialized_message_s* msg_wrapper = buf;
     const struct uavcan_protocol_file_Read_res_s *res = (const struct uavcan_protocol_file_Read_res_s*)msg_wrapper->msg;
 
     struct file_read_receive_handler_ctx_s* ctx = ctx_p;
 
     // Check if the transfer id matches
-    if (msg_wrapper->transfer_id != ctx->transfer_id || res->error != 0) {
+    if (msg_wrapper->transfer_id != ctx->transfer_id || res->error.value != 0) {
         return;
     }
 
@@ -28,7 +30,7 @@ static void file_read_receive_handler(size_t msg_size, const void* buf, void* ct
         ctx->len = res->data_len;
     }
 
-    memcpy(ctx_struct->data, res->data, ctx->len);
+    memcpy(ctx->data, res->data, ctx->len);
 }
 
 static size_t uavcan_filesystem_read_single_chunk_timeout(uint8_t node_id, const char* path, uint64_t ofs, uint8_t* buf, uint32_t max_len_recv, systime_t timeout) {
@@ -44,9 +46,9 @@ static size_t uavcan_filesystem_read_single_chunk_timeout(uint8_t node_id, const
     // Send read request
     struct uavcan_protocol_file_Read_req_s read_req;
     read_req.offset = ofs;
-    strncpy(read_req.path.path, path, sizeof(read_req.path));
-    read_req.path.path_len = strnlen(path, sizeof(read_req.path));
-    uavcan_request(flash_state.uavcan_idx, &uavcan_protocol_file_Read_req_descriptor, CANARD_TRANSFER_PRIORITY_LOW-1, node_id, &read_req, &ctx.transfer_id);
+    strncpy((char*)read_req.path.path, path, sizeof(read_req.path));
+    read_req.path.path_len = strnlen(path, sizeof(read_req.path.path));
+    ctx.transfer_id = uavcan_request(0, &uavcan_protocol_file_Read_req_descriptor, CANARD_TRANSFER_PRIORITY_LOW-1, node_id, &read_req);
 
     while (true) {
         systime_t tnow = chVTGetSystemTimeX();
@@ -60,9 +62,9 @@ static size_t uavcan_filesystem_read_single_chunk_timeout(uint8_t node_id, const
 
         // Await response
         pubsub_listener_handle_one_timeout(&listener, remaining);
-        if (ctx->success) {
+        if (ctx.success) {
             pubsub_listener_unregister(&listener);
-            return ctx->data_len;
+            return ctx.len;
         }
     }
 

@@ -44,10 +44,9 @@ static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
     uint16_t crc16 = crc16_ccitt(buf, msg_size, 0);
 
     UINT bw;
-    FRESULT res;
-    res = f_write(&writer->logfile->fp, &msg_size, sizeof(msg_size), &bw);
-    res = f_write(&writer->logfile->fp, &crc16, 2, &bw);
-    res = f_write(&writer->logfile->fp, buf, msg_size, &bw);
+    f_write(&writer->logfile->fp, &msg_size, sizeof(msg_size), &bw);
+    f_write(&writer->logfile->fp, &crc16, 2, &bw);
+    f_write(&writer->logfile->fp, buf, msg_size, &bw);
 
 
 

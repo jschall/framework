@@ -60,7 +60,7 @@ static bool flash_pageaddr_initialised;
 
 
 static uint32_t stm32_flash_getpagesize(uint32_t page);
-static uint32_t stm32_flash_getnumpages(void);
+static uint32_t stm32_flash_getnumpages(void) __attribute__((unused));
 
 #define FLASH_KEY1      0x45670123
 #define FLASH_KEY2      0xCDEF89AB
@@ -157,7 +157,7 @@ uint32_t stm32_flash_getpagesize(uint32_t page)
 /*
   return total number of pages
  */
-uint32_t stm32_flash_getnumpages()
+static uint32_t stm32_flash_getnumpages()
 {
     return STM32_FLASH_NPAGES;
 }

@@ -2,7 +2,9 @@
 #if !defined(_FROM_ASM_)
 #include <stdint.h>
 
+#ifndef STM32F427xx
 #define STM32F427xx
+#endif
 
 #define BOARD_PARAM1_FLASH_SIZE ((size_t)&_param1_flash_sec_end - (size_t)&_param1_flash_sec)
 #define BOARD_PARAM2_FLASH_SIZE ((size_t)&_param2_flash_sec_end - (size_t)&_param2_flash_sec)

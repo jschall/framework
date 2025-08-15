@@ -1,6 +1,8 @@
 #pragma once
 
+#ifndef STM32F767xx
 #define STM32F767xx
+#endif
 
 #if !defined(_FROM_ASM_)
 #include <stdint.h>

@@ -43,6 +43,7 @@ RUN_AFTER(CH_SYS_INIT) {
         }
     }
 #else
+    (void)try_reformat; // silence unused-function if not used by feature
     if (res != FR_OK) {
         return;
     }

@@ -52,7 +52,7 @@ static void _print_thread_free_stack(const char* name, void* stack_base) {
 static void print_thread_free_stack(thread_t* thread) {
     if (!thread->wabase) {
         _print_thread_free_stack(thread->name, &__process_stack_base__);
-    } else if(thread->wabase == ch_idle_thread_wa) {
+    } else if (thread == chSysGetIdleThreadX()) {
         _print_thread_free_stack(thread->name, thread->wabase);
     } else {
         _print_thread_free_stack(thread->name, (uint8_t*)thread->wabase + sizeof(thread_t));

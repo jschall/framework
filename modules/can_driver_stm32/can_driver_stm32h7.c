@@ -263,7 +263,7 @@ static void can_driver_stm32_start(void* ctx, bool silent, bool auto_retransmit,
     //TODO: Do timing calculations for FDCAN
     instance->can->NBTP = ((can_timing.sjw << FDCAN_NBTP_NSJW_Pos)   |
                   (can_timing.bs1 << FDCAN_NBTP_NTSEG1_Pos) |
-                  (can_timing.bs2 << FDCAN_NBTP_TSEG2_Pos)  |
+                  (can_timing.bs2 << FDCAN_NBTP_NTSEG2_Pos) |
                   (can_timing.prescaler << FDCAN_NBTP_NBRP_Pos));
 
     //RX Config

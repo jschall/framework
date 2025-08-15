@@ -143,11 +143,7 @@ static SPIConfig spi_make_config(struct spi_device_s* dev) {
 #endif
     }
 
-    SPIConfig ret;
-    ret.circular = false;
-    ret.end_cb = NULL;
-    ret.ssport = 0;
-    ret.sspad = 0;
+    SPIConfig ret = {0};
 #ifdef STM32H7
     ret.cfg1 = ((br_regval&0b111)<<28) | (((dev->data_size-1)&0b1111)<<0);
     ret.cfg2 = (FLAG_BIT_VAL(dev->flags,SPI_DEVICE_FLAG_CPHA)<<24) | (FLAG_BIT_VAL(dev->flags,SPI_DEVICE_FLAG_CPOL)<<25) | (FLAG_BIT_VAL(dev->flags,SPI_DEVICE_FLAG_LSBFIRST)<<23);

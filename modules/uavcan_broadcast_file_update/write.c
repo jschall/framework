@@ -1,6 +1,8 @@
 #include <modules/worker_thread/worker_thread.h>
 #include <modules/uSD/uSD.h>
 #include <modules/uavcan_debug/uavcan_debug.h>
+#include <com.hex.file.FileStreamChunk.h>
+#include <uavcan.protocol.file.Write.h>
 #include <string.h>
 
 #ifndef UAVCAN_FILE_SERVER_WORKER_THREAD

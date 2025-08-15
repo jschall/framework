@@ -31,7 +31,7 @@
 #include <framework_conf.h>
 
 #define _CHIBIOS_RT_CONF_
-#define _CHIBIOS_RT_CONF_VER_6_0_
+#define _CHIBIOS_RT_CONF_VER_7_0_
 /*===========================================================================*/
 /**
  * @name System timers settings
@@ -105,6 +105,16 @@
  */
 #ifndef CH_CFG_ST_TIMEDELTA
 #define CH_CFG_ST_TIMEDELTA                 2
+#endif
+
+/* RT 7.x required base option */
+#if !defined(CH_CFG_SMP_MODE)
+#define CH_CFG_SMP_MODE                     FALSE
+#endif
+
+/* RT 7.x additional options used by headers */
+#if !defined(CH_CFG_USE_TIMESTAMP)
+#define CH_CFG_USE_TIMESTAMP                FALSE
 #endif
 
 /*
@@ -208,6 +218,17 @@
  */
 #if !defined(CH_CFG_USE_TM)
 #define CH_CFG_USE_TM                       FALSE
+#endif
+
+/* OSLIB feature flags required by 8.x/7.x headers */
+#if !defined(CH_CFG_USE_OBJ_CACHES)
+#define CH_CFG_USE_OBJ_CACHES               FALSE
+#endif
+#if !defined(CH_CFG_USE_DELEGATES)
+#define CH_CFG_USE_DELEGATES                FALSE
+#endif
+#if !defined(CH_CFG_USE_JOBS)
+#define CH_CFG_USE_JOBS                     FALSE
 #endif
 
 /**
@@ -632,8 +653,20 @@
  *          just before interrupts are enabled globally.
  */
 #define CH_CFG_SYSTEM_INIT_HOOK() {                                         \
-  /* Add threads initialization code here.*/                                \
+  /* Add system initialization code here.*/                                 \
 }
+
+/* New in RT 7.x: OS instance hooks */
+#if !defined(CH_CFG_OS_INSTANCE_EXTRA_FIELDS)
+#define CH_CFG_OS_INSTANCE_EXTRA_FIELDS                                     \
+  /* Add OS instance custom fields here.*/
+#endif
+
+#if !defined(CH_CFG_OS_INSTANCE_INIT_HOOK)
+#define CH_CFG_OS_INSTANCE_INIT_HOOK(oip) {                                 \
+  (void)(oip);                                                               \
+}
+#endif
 
 /**
  * @brief   Threads descriptor structure extension.
@@ -736,6 +769,13 @@
 #ifndef CH_CFG_SYSTEM_HALT_HOOK
 #define CH_CFG_SYSTEM_HALT_HOOK(reason) {                                   \
 /* System halt code here.*/                                               \
+}
+#endif
+
+/* New in RT 7.x: runtime faults hook */
+#if !defined(CH_CFG_RUNTIME_FAULTS_HOOK)
+#define CH_CFG_RUNTIME_FAULTS_HOOK(mask) {                                  \
+  (void)(mask);                                                              \
 }
 #endif
 

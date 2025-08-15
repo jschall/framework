@@ -139,7 +139,7 @@ static bool crc4(uint16_t *prom) {
     crc_read = prom[7];
 
     /* remove CRC byte */
-    prom[7] = (0xFF00 & (prom[7]));
+    prom[7] = (uint16_t)(0xFF00 & (prom[7]));
 
     for (cnt = 0; cnt < 16; cnt++) {
         /* uneven bytes */
@@ -165,7 +165,7 @@ static bool crc4(uint16_t *prom) {
     prom[7] = crc_read;
 
     /* return true if CRCs match */
-    return (0x000F & crc_read) == (n_rem ^ 0x00);
+    return (uint16_t)(0x000F & crc_read) == (uint16_t)(n_rem ^ 0x00);
 }
 
 static uint32_t ms5611_read_adc(struct ms5611_instance_s* instance) {

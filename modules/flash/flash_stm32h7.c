@@ -2,6 +2,7 @@
 
 #include <ch.h>
 #include <hal.h>
+#include <stdint.h>
 
 #if defined(STM32H7)
 
@@ -91,7 +92,7 @@ void* flash_get_page_addr(uint32_t page)
     if (page >= STM32_FLASH_NPAGES) {
         return 0;
     }
-    return STM32_FLASH_BASE + page * STM32_FLASH_FIXED_PAGE_SIZE * 1024;
+    return (void*)(uintptr_t)(STM32_FLASH_BASE + page * STM32_FLASH_FIXED_PAGE_SIZE * 1024U);
 }
 
 uint32_t flash_get_page_ofs(uint32_t page)
@@ -104,6 +105,7 @@ uint32_t flash_get_page_ofs(uint32_t page)
  */
 uint32_t stm32_flash_getpagesize(uint32_t page)
 {
+    (void)page;
     return STM32_FLASH_FIXED_PAGE_SIZE;
 }
 

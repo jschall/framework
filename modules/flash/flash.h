@@ -9,7 +9,7 @@ struct flash_write_buf_s {
     const void* data;
 };
 
-#if defined(STM32F4) || defined(STM32F7) || defined(STM32F3xx_MCUCONF)
+#if defined(STM32F4) || defined(STM32F7) || defined(STM32F3)
 #define FLASH_WORD_SIZE 2U
 #elif defined(STM32H7)
 #define FLASH_WORD_SIZE 32U

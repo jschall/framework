@@ -3,6 +3,7 @@
 #include <uavcan.equipment.gnss.Fix2.h>
 #include <uavcan.equipment.gnss.Auxiliary.h>
 #include <uavcan.equipment.ahrs.MagneticFieldStrength.h>
+#include <modules/uavcan/uavcan.h>
 
 enum sensor_type_t {
     SENSOR_TYPE_IMU,
