@@ -205,7 +205,11 @@ bool worker_thread_publisher_task_publish_I(struct worker_thread_publisher_task_
         writer_cb(size, msg->data, ctx);
     }
 
-    chMBPostI(&task->mailbox, (msg_t)msg);
+    msg_t post_result = chMBPostI(&task->mailbox, (msg_t)msg);
+    if (post_result != MSG_OK) {
+        chPoolFreeI(&task->pool, msg);
+        return false;
+    }
 
     worker_thread_wake_I(task->worker_thread);
     return true;
