@@ -99,6 +99,9 @@ endif
 
 -include $(foreach module_dir,$(MODULE_DIRS),$(module_dir)/module.mk)
 
+# Remove duplicates from MODULES_ENABLED after including module.mk files
+MODULES_ENABLED := $(sort $(MODULES_ENABLED))
+
 MODULES_CSRC := $(foreach search_dir,$(MODULE_SEARCH_DIRS),$(foreach module,$(MODULES_ENABLED),$(patsubst $(search_dir)/%,$(MODULES_ENABLED_DIR)/%,$(wildcard $(search_dir)/$(module)/*.c))))
 MODULES_CPPSRC := $(foreach search_dir,$(MODULE_SEARCH_DIRS),$(foreach module,$(MODULES_ENABLED),$(patsubst $(search_dir)/%,$(MODULES_ENABLED_DIR)/%,$(wildcard $(search_dir)/$(module)/*.cpp))))
 
