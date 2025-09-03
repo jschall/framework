@@ -293,8 +293,6 @@ static void file_read_response_handler(size_t msg_size, const void* buf, void* c
             return;
         }
 
-        BL_DEBUG("received read response");
-
         process_chunk(res->data_len, res->data);
     }
 }
