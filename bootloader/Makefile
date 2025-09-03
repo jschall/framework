@@ -22,13 +22,17 @@ can_autobaud \
 uavcan \
 uavcan_nodestatus_publisher \
 uavcan_allocatee \
-usb_slcan
+uavcan_debug \
+pubsub_miss_measurement \
+load_measurement
 
 MESSAGES_ENABLED = \
 uavcan.protocol.GetNodeInfo \
 uavcan.protocol.file.BeginFirmwareUpdate \
 uavcan.protocol.file.Read \
 uavcan.protocol.RestartNode \
+uavcan.protocol.debug.LogMessage \
+uavcan.protocol.debug.KeyValue \
 uavcan.equipment.indication.LightsCommand \
 com.hex.file.FileStreamStart \
 com.hex.file.FileStreamChunk

@@ -79,9 +79,6 @@ static struct worker_thread_listener_task_s getnodeinfo_req_listener_task;
 #ifdef BOOTLOADER_SUPPORT_BROADCAST_UPDATE
 static struct worker_thread_listener_task_s filestreamchunk_listener_task;
 static void filestreamchunk_handler(size_t msg_size, const void* buf, void* ctx);
-
-// static struct worker_thread_listener_task_s filestreamstart_res_listener_task;
-// static void filestreamstart_res_handler(size_t msg_size, const void* buf, void* ctx);
 #endif // BOOTLOADER_SUPPORT_BROADCAST_UPDATE
 
 static void file_beginfirmwareupdate_request_handler(size_t msg_size, const void* buf, void* ctx);
@@ -133,9 +130,6 @@ RUN_AFTER(UAVCAN_INIT) {
 #ifdef BOOTLOADER_SUPPORT_BROADCAST_UPDATE
     struct pubsub_topic_s* filestreamchunk_topic = uavcan_get_message_topic(0, &com_hex_file_FileStreamChunk_descriptor);
     worker_thread_add_listener_task(&WT, &filestreamchunk_listener_task, filestreamchunk_topic, filestreamchunk_handler, NULL);
-
-//     struct pubsub_topic_s* filestreamstart_res_topic = uavcan_get_message_topic(0, &com_hex_file_FileStreamStart_res_descriptor);
-//     worker_thread_add_listener_task(&WT, &filestreamstart_res_listener_task, filestreamstart_res_topic, filestreamstart_res_handler, NULL);
 #endif // BOOTLOADER_SUPPORT_BROADCAST_UPDATE
 }
 
@@ -311,8 +305,9 @@ static void do_send_read_request(bool retry) {
     if (!flash_state.using_stream_mode) {
         struct uavcan_protocol_file_Read_req_s read_req;
         flash_state.read_req_ofs = read_req.offset = flash_state.ofs;
-        strncpy((char*)read_req.path.path,flash_state.path,sizeof(read_req.path));
-        read_req.path.path_len = strnlen(flash_state.path,sizeof(read_req.path));
+        size_t copy_len = strnlen(flash_state.path, sizeof(read_req.path.path));
+        memcpy(read_req.path.path, flash_state.path, copy_len);
+        read_req.path.path_len = copy_len;
         flash_state.read_transfer_id = uavcan_request(flash_state.uavcan_idx, &uavcan_protocol_file_Read_req_descriptor, CANARD_TRANSFER_PRIORITY_MEDIUM+1, flash_state.source_node_id, &read_req);
     }
 
@@ -322,13 +317,14 @@ static void do_send_read_request(bool retry) {
         req.offset = flash_state.ofs;
         req.path.path_len = strnlen(flash_state.path, 200);
         memcpy(req.path.path, flash_state.path, req.path.path_len);
-        uavcan_request(flash_state.uavcan_idx, &com_hex_file_FileStreamStart_req_descriptor, CANARD_TRANSFER_PRIORITY_MEDIUM+1, flash_state.source_node_id, &req);
+        uint8_t stream_transfer_id = uavcan_request(flash_state.uavcan_idx, &com_hex_file_FileStreamStart_req_descriptor, CANARD_TRANSFER_PRIORITY_MEDIUM+1, flash_state.source_node_id, &req);
     }
 #else
     struct uavcan_protocol_file_Read_req_s read_req;
     flash_state.read_req_ofs = read_req.offset = flash_state.ofs;
-    strncpy((char*)read_req.path.path,flash_state.path,sizeof(read_req.path));
-    read_req.path.path_len = strnlen(flash_state.path,sizeof(read_req.path));
+    size_t copy_len = strnlen(flash_state.path, sizeof(read_req.path.path));
+    memcpy(read_req.path.path, flash_state.path, copy_len);
+    read_req.path.path_len = copy_len;
     flash_state.read_transfer_id = uavcan_request(flash_state.uavcan_idx, &uavcan_protocol_file_Read_req_descriptor, CANARD_TRANSFER_PRIORITY_MEDIUM+1, flash_state.source_node_id, &read_req);
 #endif
 

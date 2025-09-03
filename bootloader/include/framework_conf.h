@@ -14,9 +14,11 @@
 #define UAVCAN_ALLOCATEE_WORKER_THREAD                  lpwork_thread
 #define BOOTLOADER_APP_THREAD                           lpwork_thread
 #define LOGGER_WORKER_THREAD                            lpwork_thread
-#define USB_SLCAN_WORKER_THREAD                         can_thread
 #define UAVCAN_TIMESYNC_WORKER_THREAD                   lpwork_thread
+#define PUBSUB_MISS_MEASUREMENT_WORKER_THREAD           lpwork_thread
+#define LOAD_MEASUREMENT_WORKER_THREAD                  lpwork_thread
 
+#define USB_SLCAN_WORKER_THREAD                         can_thread
 #define CAN_TRX_WORKER_THREAD                           can_thread
 #define CAN_EXPIRE_WORKER_THREAD                        can_thread
 #define UAVCAN_RX_WORKER_THREAD                         can_thread
