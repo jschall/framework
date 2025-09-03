@@ -67,7 +67,7 @@ static struct can_driver_stm32_instance_s can1_instance;
 RUN_ON(CAN_INIT) {
     // TODO make this index configurable and enable multiple instances
     can1_instance.can = FDCAN1;
-    can1_instance.frontend = can_driver_register(0, &can1_instance, &can_driver_stm32_iface, FDCAN_TX_FIFO_BUFFER_SIZE/FDCAN_FRAME_BUFFER_SIZE, FDCAN_NUM_RXFIFO0_SIZE/FDCAN_FRAME_BUFFER_SIZE, 1);
+    can1_instance.frontend = can_driver_register(0, &can1_instance, &can_driver_stm32_iface, FDCAN_TX_FIFO_BUFFER_SIZE/FDCAN_FRAME_BUFFER_SIZE, FDCAN_NUM_RXFIFO0_SIZE/FDCAN_FRAME_BUFFER_SIZE, 4);
 }
 
 static bool setupMessageRam(struct can_driver_stm32_instance_s* can_instance)
@@ -277,7 +277,7 @@ static void can_driver_stm32_start(void* ctx, bool silent, bool auto_retransmit,
     //Enable Interrupts
     instance->can->IE =  FDCAN_IE_TCE |  // Transmit Complete interrupt enable
                 FDCAN_IE_RF0NE |  // RX FIFO 0 new message
-                FDCAN_IE_RF0FE |  // Rx FIFO 1 FIFO Full
+                FDCAN_IE_RF0FE |  // Rx FIFO 0 FIFO Full
                 FDCAN_IE_RF1NE |  // RX FIFO 1 new message
                 FDCAN_IE_RF1FE |  // Rx FIFO 1 FIFO Full
                 FDCAN_IE_BOE;     // bus off

@@ -16,6 +16,10 @@
 #error Please define CAN_EXPIRE_WORKER_THREAD in framework_conf.h.
 #endif
 
+#ifdef CAN_RX_PUBSUB_TOPIC_GROUP
+PUBSUB_TOPIC_GROUP_DECLARE_EXTERN(CAN_RX_PUBSUB_TOPIC_GROUP)
+#endif
+
 #define WT_TRX CAN_TRX_WORKER_THREAD
 #define WT_EXPIRE CAN_EXPIRE_WORKER_THREAD
 WORKER_THREAD_DECLARE_EXTERN(WT_TRX)
@@ -340,11 +344,15 @@ void can_enqueue_tx_frames(struct can_instance_s* instance, struct can_tx_frame_
     (void)origin;
 #endif
 
+    systime_t t_now = chVTGetSystemTimeX();
+
     if (!instance) {
+        if (completion_topic) {
+            struct can_transmit_completion_msg_s msg = { t_now, false };
+            pubsub_publish_message(completion_topic, sizeof(struct can_transmit_completion_msg_s), pubsub_copy_writer_func, &msg);
+        }
         return;
     }
-
-    systime_t t_now = chVTGetSystemTimeX();
 
     struct can_tx_frame_s* frame = *frame_list;
 
@@ -377,12 +385,7 @@ void can_enqueue_tx_frames(struct can_instance_s* instance, struct can_tx_frame_
 #endif
 
     // If not started or in silent mode, fail immediately
-#ifdef CAN_MODULE_ENABLE_BRIDGE_INTERFACE
-    // Also if the bridge interface is in use, reserve half the transmit queue for allocation
-    if (!instance->started || instance->silent || instance->frame_pool_freecount < CAN_TX_QUEUE_LEN/2) {
-#else
     if (!instance->started || instance->silent) {
-#endif
         if (completion_topic) {
             struct can_transmit_completion_msg_s msg = { t_now, false };
             pubsub_publish_message(completion_topic, sizeof(struct can_transmit_completion_msg_s), pubsub_copy_writer_func, &msg);
@@ -495,7 +498,11 @@ struct can_instance_s* can_driver_register(uint8_t can_idx, void* driver_ctx, co
 
     can_tx_queue_init(&instance->tx_queue);
 
-    pubsub_init_topic(&instance->rx_topic, NULL); // TODO specific/configurable topic group
+#ifdef CAN_RX_PUBSUB_TOPIC_GROUP
+    pubsub_init_topic(&instance->rx_topic, &CAN_RX_PUBSUB_TOPIC_GROUP);
+#else
+    pubsub_init_topic(&instance->rx_topic, NULL); // default topic group
+#endif
 
     worker_thread_add_publisher_task(&WT_TRX, &instance->rx_publisher_task, sizeof(struct can_rx_frame_s), num_rx_mailboxes*rx_fifo_depth);
 
