@@ -28,6 +28,7 @@
 //
 
 #define PUBSUB_DEFAULT_TOPIC_GROUP default_topic_group
+#define CAN_RX_PUBSUB_TOPIC_GROUP can_topic_group
 
 //
 // Configure debug checks
