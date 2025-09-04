@@ -50,6 +50,24 @@
     extern systime_t idle_total_ticks;                                      \
     idle_total_ticks += chVTGetSystemTimeX()-idle_enter_t;                  \
 }
+
+/* IRQ time accounting hooks */
+#define CH_CFG_IRQ_PROLOGUE_HOOK() {                                        \
+    extern volatile systime_t irq_enter_t;                                  \
+    extern volatile uint32_t irq_nesting;                                   \
+    if (irq_nesting++ == 0) {                                               \
+        irq_enter_t = chVTGetSystemTimeX();                                 \
+    }                                                                        \
+}
+
+#define CH_CFG_IRQ_EPILOGUE_HOOK() {                                        \
+    extern volatile systime_t irq_enter_t;                                  \
+    extern volatile systime_t irq_total_ticks;                              \
+    extern volatile uint32_t irq_nesting;                                   \
+    if (--irq_nesting == 0) {                                               \
+        irq_total_ticks += chVTGetSystemTimeX() - irq_enter_t;              \
+    }                                                                        \
+}
 #endif
 
 #if !defined(FALSE)
