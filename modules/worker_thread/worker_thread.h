@@ -2,6 +2,7 @@
 
 #include <ch.h>
 #include <common/ctor.h>
+#include <hal.h>
 
 #ifdef MODULE_PUBSUB_ENABLED
 #include <modules/pubsub/pubsub.h>
@@ -29,6 +30,11 @@ int main(void) { \
 
 #define WORKER_THREAD_DECLARE_EXTERN(NAME) \
 extern struct worker_thread_s NAME;
+
+#define WORKER_THREAD_SET_DEBUG_PIN(THREAD, PIN) \
+RUN_AFTER(WORKER_THREADS_INIT) { \
+    (THREAD)->debug_pin = (PIN); \
+}
 
 #define WORKER_THREAD_PERIODIC_TIMER_TASK_AUTOSTART(TASK_NAME, WORKER_THREAD, PERIOD) \
 static struct worker_thread_timer_task_s TASK_NAME; \
@@ -79,6 +85,7 @@ struct worker_thread_s {
     tprio_t priority;
     thread_t* thread;
     thread_t* suspend_trp;
+    uint32_t debug_pin;
     struct worker_thread_timer_task_s* timer_task_list_head;
 #ifdef MODULE_PUBSUB_ENABLED
     struct worker_thread_listener_task_s* listener_task_list_head;

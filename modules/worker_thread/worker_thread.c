@@ -1,7 +1,7 @@
 #include "worker_thread.h"
 
 #include <common/helpers.h>
-
+    
 static THD_FUNCTION(worker_thread_func, arg);
 
 static void worker_thread_wake_I(struct worker_thread_s* worker_thread);
@@ -33,6 +33,7 @@ void worker_thread_init(struct worker_thread_s* worker_thread, const char* name,
 
     worker_thread->thread = NULL;
     worker_thread->suspend_trp = NULL;
+    worker_thread->debug_pin = PAL_NOLINE;
 }
 
 void worker_thread_start(struct worker_thread_s* worker_thread, size_t stack_size) {
@@ -221,6 +222,11 @@ void worker_thread_takeover(struct worker_thread_s* worker_thread) {
     chThdSetPriority(worker_thread->priority);
     worker_thread->thread = chThdGetSelfX();
 
+    // Set debug pin when thread starts
+    if (worker_thread->debug_pin != PAL_NOLINE) {
+        palSetLine(worker_thread->debug_pin);
+    }
+
     while (true) {
 #ifdef MODULE_PUBSUB_ENABLED
         // Handle publisher tasks
@@ -281,18 +287,34 @@ void worker_thread_takeover(struct worker_thread_s* worker_thread) {
             // If a listener task is due, we should not sleep until we've handled it
             if (worker_thread_get_any_listener_task_due_I(worker_thread)) {
                 chSysUnlock();
+                if (worker_thread->debug_pin != PAL_NOLINE) {
+                    palClearLine(worker_thread->debug_pin);
+                }
                 continue;
             }
 
             // If a publisher task is due, we should not sleep until we've handled it
             if (worker_thread_get_any_publisher_task_due_I(worker_thread)) {
                 chSysUnlock();
+                if (worker_thread->debug_pin != PAL_NOLINE) {
+                    palClearLine(worker_thread->debug_pin);
+                }
                 continue;
             }
 #endif
 
             // No task due - go to sleep until there is a task
+            // Clear debug pin before going to sleep
+            if (worker_thread->debug_pin != PAL_NOLINE) {
+                palClearLine(worker_thread->debug_pin);
+            }
+
             chThdSuspendTimeoutS(&worker_thread->suspend_trp, ticks_to_next_timer_task);
+
+            // Set debug pin after waking up
+            if (worker_thread->debug_pin != PAL_NOLINE) {
+                palSetLine(worker_thread->debug_pin);
+            }
 
             chSysUnlock();
         }
