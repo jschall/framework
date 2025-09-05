@@ -30,7 +30,7 @@ endif
 # FPU options default (Cortex-M4 and Cortex-M7 single precision).
 ifeq ($(USE_FPU_OPT),)
   #USE_FPU_OPT = -mfloat-abi=$(USE_FPU) -mfpu=fpv5-d16 -fsingle-precision-constant
-  USE_FPU_OPT = -mfloat-abi=$(USE_FPU) -mfpu=fpv4-sp-d16 -fsingle-precision-constant
+  USE_FPU_OPT = -mfloat-abi=$(USE_FPU) -mfpu=fpv5-sp-d16 -fsingle-precision-constant
 endif
 
 # FPU-related options
