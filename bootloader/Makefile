@@ -23,6 +23,7 @@ uavcan \
 uavcan_nodestatus_publisher \
 uavcan_allocatee \
 uavcan_debug \
+usb_slcan \
 pubsub_miss_measurement \
 load_measurement
 
@@ -45,5 +46,18 @@ UDEFS += -DTARGET_BOOTLOADER
 
 include ../include.mk
 
+# DFU (USB Device Firmware Upgrade) upload settings
+DFU_DEVICE ?= 0483:df11
+DFU_ALT ?= 0
+DFU_ADDR ?= 0x08000000
+
+.PHONY: upload dfu mass_erase
+
 upload: build/$(BOARD)/$(PROJECT).elf
 	openocd -f openocd.cfg -c "program $< verify reset exit"
+
+dfu-upload: build/$(BOARD)/$(PROJECT).bin
+	dfu-util -d $(DFU_DEVICE) -a $(DFU_ALT) -s $(DFU_ADDR):leave -D $<
+
+mass_erase:
+	openocd -f openocd.cfg -c "init;halt;stm32h7x mass_erase 0;exit"
