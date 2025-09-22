@@ -25,3 +25,11 @@ uint32_t flash_get_page_ofs(uint32_t page);
 // Returns true on success (no double-bit error). If provided, outputs whether a
 // single-bit error was corrected and whether a double-bit error was detected.
 bool flash_check_word_ecc(const void* address, bool* single_bit_corrected, bool* double_bit_error);
+
+// Scan a flash memory region for ECC events and return offset of first double-bit error word.
+// Returns 0 if no double-bit errors are found or ECC not supported.
+// Otherwise returns the absolute address of the first failure.
+uint32_t flash_scan_region_for_ecc(const void* base, uint32_t size);
+
+// Returns true if the FLASH_WORD_SIZE bytes at address are all 0xFF.
+bool flash_is_erased_word(const void* address);
