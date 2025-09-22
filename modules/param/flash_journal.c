@@ -60,14 +60,17 @@ bool flash_journal_write(struct flash_journal_instance_s* instance, size_t entry
     return flash_journal_write_from_2_buffers(instance, entry_buf1_size, entry_buf1, 0, NULL);
 }
 
-uint32_t flash_journal_count_entries(struct flash_journal_instance_s* instance) {
+uint32_t flash_journal_count_entries_bounded(struct flash_journal_instance_s* instance, const void* max_addr) {
     if (!instance) {
         return 0;
+    }
+    if (!max_addr) {
+        max_addr = (const void*)0xffffffffu; // No bound
     }
 
     uint32_t ret = 0;
     const struct flash_journal_entry_s* entry = NULL;
-    while(flash_journal_iterate(instance, &entry)) {
+    while(flash_journal_iterate_bounded(instance, &entry, max_addr)) {
         ret++;
     }
 
@@ -80,6 +83,26 @@ bool flash_journal_erase(struct flash_journal_instance_s* instance) {
     }
 
     return flash_erase_page(instance->flash_page_ptr);
+}
+
+bool flash_journal_iterate_bounded(struct flash_journal_instance_s* instance, const struct flash_journal_entry_s** entry_ptr, const void* max_addr) {
+    if (!instance || !entry_ptr || !max_addr) return false;
+    const uint8_t* limit = (const uint8_t*)max_addr;
+    if (!*entry_ptr) {
+        *entry_ptr = instance->flash_page_ptr;
+    } else if (flash_journal_entry_valid(instance, *entry_ptr)) {
+        size_t entry_size = flash_journal_entry_size((*entry_ptr)->len);
+        const uint8_t* next = (const uint8_t*)(*entry_ptr) + entry_size;
+        if (next >= limit) {
+            return false;
+        }
+        *entry_ptr = (const struct flash_journal_entry_s*)next;
+    }
+    // Now check current entry fully fits and is valid
+    if ((const uint8_t*)(*entry_ptr) + FLASH_JOURNAL_ENTRY_HEADER_SIZE > limit) return false;
+    // ensure full entry fits in bounds
+    if ((const uint8_t*)(*entry_ptr) + flash_journal_entry_size((*entry_ptr)->len) > limit) return false;
+    return flash_journal_entry_valid(instance, *entry_ptr);
 }
 
 bool flash_journal_iterate(struct flash_journal_instance_s* instance, const struct flash_journal_entry_s** entry_ptr) {

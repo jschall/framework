@@ -10,6 +10,8 @@
 #include <chprintf.h>
 #include <memstreams.h>
 #include <stdarg.h>
+#include <faults.h>
+#include <modules/flash/flash.h>
 
 #ifndef PARAM_MAX_NUM_PARAMS
 #define PARAM_MAX_NUM_PARAMS 50
@@ -57,7 +59,72 @@ static bool param_type_get_size_fixed(enum param_type_t type);
 static int64_t param_uncompress_varint64(uint8_t len, const uint8_t* buf);
 static uint8_t param_compress_varint64(int64_t value, uint8_t* buf);
 static bool param_journal_iterate_final_values(const struct flash_journal_entry_s** iterator);
-static void param_compress_journal(void);
+static bool param_journal_iterate_final_values_bounded(const struct flash_journal_entry_s** iterator, const void* max_addr);
+static void param_compress_journal(bool force, const void* safe_end);
+
+struct param_journal_state_s {
+    bool suspicious;
+    bool benign_ecc;
+    bool valid;
+    bool empty;
+    uint8_t index;
+    const void* safe_end;
+};
+
+static void param_get_journal_state(struct flash_journal_instance_s* journal, struct param_journal_state_s* state) {
+    // check for ECC errors
+    void* base = journal->flash_page_ptr;
+    size_t size = journal->flash_page_size;
+    uint32_t fail_addr = flash_scan_region_for_ecc(base, size);
+    if (fail_addr != 0) {
+        const uint8_t* page_end = (const uint8_t*)base + size;
+        const uint8_t* next = (const uint8_t*)(uintptr_t)(fail_addr + FLASH_WORD_SIZE);
+        if (next + FLASH_WORD_SIZE <= page_end) {
+            state->benign_ecc = flash_is_erased_word(next);
+        } else {
+            state->benign_ecc = true; // treat out-of-bounds next word as erased
+        }
+    }
+    state->suspicious = (fail_addr != 0) && !state->benign_ecc;
+
+    // establish safe_end
+    state->safe_end = (fail_addr != 0) ? (const uint8_t*)(uintptr_t)fail_addr : (const uint8_t*)base + size;
+
+    // header must fit fully inside safe_end
+    const struct param_journal_header_s* header = NULL;
+    {
+        const struct flash_journal_entry_s* hdr_entry = NULL;
+        if (flash_journal_iterate_bounded(journal, &hdr_entry, state->safe_end) && hdr_entry && hdr_entry->len == sizeof(struct param_journal_header_s)) {
+            header = (const struct param_journal_header_s*)(hdr_entry->data);
+        }
+    }
+
+    if (!header) {
+        // empty if first header word erased
+        state->empty = flash_is_erased_word(base);
+        return;
+    }
+
+    bool header_ok = (header->format_version == PARAM_FORMAT_VERSION);
+    if (!header_ok) {
+        return;
+    }
+
+    state->index = (uint8_t)header->index;
+
+    // count committed entries within bounds
+    uint32_t counted = 1; // header counts as 1 in initial_entry_count
+    const struct flash_journal_entry_s* it = NULL;
+    // advance iterator past header within bounds
+    flash_journal_iterate_bounded(journal, &it, state->safe_end); // should point at header
+    while (flash_journal_iterate_bounded(journal, &it, state->safe_end)) {
+        counted++;
+    }
+
+    if (counted >= header->initial_entry_count) {
+        state->valid = true;
+    }
+}
 
 RUN_ON(PARAM_INIT) {
     param_acquire();
@@ -65,31 +132,99 @@ RUN_ON(PARAM_INIT) {
     flash_journal_init(&journals[0], BOARD_PARAM1_ADDR, BOARD_PARAM1_FLASH_SIZE);
     flash_journal_init(&journals[1], BOARD_PARAM2_ADDR, BOARD_PARAM2_FLASH_SIZE);
 
+    static struct param_journal_state_s state[2];
+    memset(state, 0, sizeof(state));
+
+    // scan each page for ECC errors and classify
     for (uint8_t i=0; i<2; i++) {
-        const struct param_journal_header_s* header = param_get_journal_header_ptr(&journals[i]);
+        param_get_journal_state(&journals[i], &state[i]);
+    }
 
-        if (!header || flash_journal_count_entries(&journals[i]) < header->initial_entry_count || header->format_version != PARAM_FORMAT_VERSION) {
-            // journals[i] is invalid - continue
-            continue;
-        }
+    // Suspicious always faults and aborts init to avoid any reads
+    if (state[0].suspicious || state[1].suspicious) {
+        fault_set("param", FAULT_SEVERITY_CRITICAL, "ECC error");
+        param_release();
+        return;
+    }
 
-        if (!active_journal || (header->index - param_get_journal_header_ptr(active_journal)->index) > 0) {
-            active_journal = &journals[i];
+    // Choose active valid (newest index)
+    active_journal = NULL;
+    for (uint8_t i=0; i<2; i++) {
+        if (state[i].valid) {
+            if (!active_journal) {
+                active_journal = &journals[i];
+            } else {
+                const struct param_journal_header_s* hdr_active = param_get_journal_header_ptr(active_journal);
+                const struct param_journal_header_s* hdr_new = param_get_journal_header_ptr(&journals[i]);
+                if (hdr_active && hdr_new && (uint8_t)(hdr_new->index - hdr_active->index) > 0) {
+                    active_journal = &journals[i];
+                }
+            }
         }
     }
 
     if (!active_journal) {
-        // no valid journal was found - initialize an empty one
-        struct param_journal_header_s header = {PARAM_FORMAT_VERSION, 0, 1};
-
-        flash_journal_erase(&journals[0]);
-        flash_journal_write(&journals[0], sizeof(header), &header);
-
-        active_journal = &journals[0];
+        if (state[0].empty && state[1].empty) {
+            // new board: initialize page 0
+            struct param_journal_header_s header = {PARAM_FORMAT_VERSION, 0, 1};
+            flash_journal_erase(&journals[0]);
+            flash_journal_write(&journals[0], sizeof(header), &header);
+            active_journal = &journals[0];
+        } else {
+            // No valid page remains; if any page was suspicious, we already faulted.
+            fault_set("param", FAULT_SEVERITY_CRITICAL, "journal lost");
+            param_release();
+            return;
+        }
     }
 
-    // Compress journal if needed
-    param_compress_journal();
+    uint8_t active_idx = (active_journal == &journals[0]) ? 0 : 1;
+
+    // Check if this page needs repair
+    bool need_repair = state[active_idx].benign_ecc;
+    {
+        uint8_t other = active_idx ^ 1;
+        need_repair = need_repair || (!state[other].valid) || state[other].benign_ecc;
+    }
+
+    // If active page suffered benign ECC, force migrate now to ensure post-boot: active valid, inactive valid/erased, no ECC
+    param_compress_journal(need_repair, state[active_idx].safe_end);
+
+    // Post-condition verification: ensure inactive page is now valid or erased, active valid, and no ECC remains
+    {
+        active_idx = (active_journal == &journals[0]) ? 0 : 1;
+
+        // Re-scan for ECC on both pages
+        for (uint8_t i=0; i<2; i++) {
+            void* base = journals[i].flash_page_ptr;
+            size_t size = journals[i].flash_page_size;
+            uint32_t fail_addr = flash_scan_region_for_ecc(base, size);
+            bool benign = false;
+            if (fail_addr != 0) {
+                const uint8_t* page_end = (const uint8_t*)base + size;
+                const uint8_t* next = (const uint8_t*)(uintptr_t)(fail_addr + FLASH_WORD_SIZE);
+                if (next + FLASH_WORD_SIZE <= page_end) {
+                    benign = flash_is_erased_word(next);
+                } else {
+                    benign = true;
+                }
+            }
+            state[i].suspicious = (fail_addr != 0) && !benign;
+            state[i].benign_ecc = (fail_addr != 0) && benign;
+        }
+
+        // Validate active is valid
+        bool any_ecc = state[0].suspicious || state[1].suspicious || state[0].benign_ecc || state[1].benign_ecc;
+        if (any_ecc) {
+            fault_set("param", FAULT_SEVERITY_CRITICAL, "post-init ECC error");
+        }
+
+        const struct param_journal_header_s* hdr = param_get_journal_header_ptr(active_journal);
+        bool active_valid = (hdr != NULL);
+        if (!active_valid) {
+            fault_set("param", FAULT_SEVERITY_CRITICAL, "post-init no valid journal");
+        }
+    }
 
     param_release();
 }
@@ -347,13 +482,16 @@ bool param_erase(void) {
 
     flash_journal_write(&journals[0], sizeof(header), &header);
     active_journal = &journals[0];
+
+    // Clearing persistent fault after user-initiated erase
+    fault_clear("param_ecc");
     return true;
 }
 
 bool param_store_all(void) {
     for (uint16_t i=0; i<num_params_registered; i++) {
         if (!param_store_by_idx(i)) {
-            param_compress_journal();
+            param_compress_journal(false, NULL);
             if (!param_store_by_idx(i)) {
                 return false;
             }
@@ -768,7 +906,7 @@ static bool param_write_to_flash_journal(const struct param_key_s* key, size_t v
     return flash_journal_write_from_2_buffers(active_journal, sizeof(struct param_key_s), key, value_size, value);
 }
 
-static void param_compress_journal(void) {
+static void param_compress_journal(bool force, const void* safe_end) {
     if (!active_journal) {
         return;
     }
@@ -776,12 +914,11 @@ static void param_compress_journal(void) {
     // Count unique entries
     uint32_t unique_param_entry_count = 0;
     const struct flash_journal_entry_s* journal_entry = NULL;
-    while(param_journal_iterate_final_values(&journal_entry)) {
+    while(param_journal_iterate_final_values_bounded(&journal_entry, safe_end)) {
         unique_param_entry_count++;
     }
 
-    if (unique_param_entry_count+1 == flash_journal_count_entries(active_journal)) {
-        // Compression not needed
+    if (!force && unique_param_entry_count+1 == flash_journal_count_entries_bounded(active_journal, safe_end)) {
         return;
     }
 
@@ -802,7 +939,7 @@ static void param_compress_journal(void) {
 
     // Write entries
     journal_entry = NULL;
-    while(param_journal_iterate_final_values(&journal_entry)) {
+    while(param_journal_iterate_final_values_bounded(&journal_entry, safe_end)) {
         flash_journal_write(inactive_journal, journal_entry->len, journal_entry->data);
     }
 
@@ -974,11 +1111,19 @@ static const struct param_journal_header_s* param_get_journal_header_ptr(struct 
 }
 
 static bool param_journal_iterate_final_values(const struct flash_journal_entry_s** iterator) {
-    if (*iterator == NULL) {
-        flash_journal_iterate(active_journal, iterator); // skip header
+    return param_journal_iterate_final_values_bounded(iterator, NULL);
+}
+
+static bool param_journal_iterate_final_values_bounded(const struct flash_journal_entry_s** iterator, const void* max_addr) {
+    if (!max_addr) {
+        max_addr = (const void*)0xffffffffu; // No bound
     }
 
-    while (flash_journal_iterate(active_journal, iterator)) {
+    if (*iterator == NULL) {
+        flash_journal_iterate_bounded(active_journal, iterator, max_addr); // skip header
+    }
+
+    while (flash_journal_iterate_bounded(active_journal, iterator, max_addr)) {
         const struct flash_journal_entry_s* journal_entry = *iterator;
 
         if (journal_entry->len < sizeof(struct param_journal_key_value_s)) {
@@ -989,7 +1134,7 @@ static bool param_journal_iterate_final_values(const struct flash_journal_entry_
         // ensure this is the last occurrence of this key
         bool last_occurrence = true;
         const struct flash_journal_entry_s* later_journal_entry = journal_entry;
-        while (flash_journal_iterate(active_journal, &later_journal_entry)) {
+        while (flash_journal_iterate_bounded(active_journal, &later_journal_entry, max_addr)) {
             if (later_journal_entry->len < sizeof(struct param_journal_key_value_s)) {
                 // later_journal_entry is too small to be a param entry
                 continue;

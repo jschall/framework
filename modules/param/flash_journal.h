@@ -18,4 +18,9 @@ bool flash_journal_iterate(struct flash_journal_instance_s* instance, const stru
 bool flash_journal_write_from_2_buffers(struct flash_journal_instance_s* instance, size_t entry_buf1_size, const void* entry_buf1, size_t entry_buf2_size, const void* entry_buf2);
 bool flash_journal_write(struct flash_journal_instance_s* instance, size_t entry_buf1_size, const void* entry_buf1);
 bool flash_journal_erase(struct flash_journal_instance_s* instance);
-uint32_t flash_journal_count_entries(struct flash_journal_instance_s* instance);
+uint32_t flash_journal_count_entries_bounded(struct flash_journal_instance_s* instance, const void* max_addr);
+
+// Bounded iterator: like flash_journal_iterate but never reads beyond max_addr.
+// Returns true and updates *entry_ptr to the next valid entry within bounds.
+// Returns false when no further valid entries exist in the bounded range.
+bool flash_journal_iterate_bounded(struct flash_journal_instance_s* instance, const struct flash_journal_entry_s** entry_ptr, const void* max_addr);
