@@ -5,13 +5,19 @@
 #include <common/ctor.h>
 #include "usbcfg.h"
 #include <hal.h>
+#include <ch.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#ifdef MODULE_UAVCAN_DEBUG_ENABLED
+#include <modules/uavcan_debug/uavcan_debug.h>
+#endif
 
 #ifndef USB_SLCAN_WORKER_THREAD
 #error Please define USB_SLCAN_WORKER_THREAD in framework_conf.h.
 #endif
+
+// #define SLCAN_DIRECT_LOOPBACK_DEBUG
 
 #define WT USB_SLCAN_WORKER_THREAD
 WORKER_THREAD_DECLARE_EXTERN(WT)
@@ -19,11 +25,12 @@ WORKER_THREAD_DECLARE_EXTERN(WT)
 static struct worker_thread_listener_task_s can_rx_listener_task;
 static void can_rx_listener_task_func(size_t msg_size, const void* buf, void* ctx);
 
-static struct worker_thread_timer_task_s usb_rx_timer_task;
-static void usb_rx_timer_task_func(struct worker_thread_timer_task_s* task);
+static THD_WORKING_AREA(slcan_rx_wa, 512);
+static THD_FUNCTION(slcan_rx_thread, arg);
 
 static struct worker_thread_timer_task_s usb_connect_timer_task;
 static void usb_connect_timer_task_func(struct worker_thread_timer_task_s* task);
+
 
 struct slcan_instance_s {
     struct can_instance_s* can_instance;
@@ -51,7 +58,7 @@ RUN_AFTER(CAN_INIT) {
     instance.loopback_enable = false;
 
     worker_thread_add_timer_task(&WT, &usb_connect_timer_task, usb_connect_timer_task_func, &instance, chTimeS2I(1), false);
-    worker_thread_add_timer_task(&WT, &usb_rx_timer_task, usb_rx_timer_task_func, &instance, chTimeMS2I(1), true);
+    chThdCreateStatic(slcan_rx_wa, sizeof(slcan_rx_wa), WT.priority, slcan_rx_thread, &instance);
     worker_thread_add_listener_task(&WT, &can_rx_listener_task, can_get_rx_topic(instance.can_instance), can_rx_listener_task_func, &instance);
 }
 
@@ -60,6 +67,7 @@ static void usb_connect_timer_task_func(struct worker_thread_timer_task_s* task)
     usbStart(serusbcfg.usbp, &usbcfg);
     usbConnectBus(serusbcfg.usbp);
 }
+
 
 static uint8_t hex_to_nibble(char c) {
     const char* hex_chars = "0123456789ABCDEF";
@@ -70,7 +78,63 @@ static uint8_t hex_to_nibble(char c) {
     return chrptr-hex_chars;
 }
 
+static size_t can_frame_to_slcan(struct slcan_instance_s* instance, const struct can_frame_s* frame, char* slcan_frame, size_t max_len, bool loopback) {
+    const char *hex = "0123456789ABCDEF";
+
+    if (max_len < 64) {
+        return 0; // Insufficient buffer
+    }
+
+    size_t slcan_frame_len = 1;
+
+    if (frame->RTR) {
+        slcan_frame[0] = 'r';
+    } else {
+        slcan_frame[0] = 't';
+    }
+
+    if (frame->IDE) {
+        slcan_frame[0] = ascii_toupper(slcan_frame[0]);
+        for (uint8_t i=0; i<8; i++) {
+            slcan_frame[slcan_frame_len++] = hex[(frame->EID >> ((7-i)*4))&0xf];
+        }
+    } else {
+        for (uint8_t i=0; i<3; i++) {
+            slcan_frame[slcan_frame_len++] = hex[(frame->SID >> ((2-i)*4))&0xf];
+        }
+    }
+
+    slcan_frame[slcan_frame_len++] = hex[frame->DLC];
+
+    if (!frame->RTR) {
+        for (uint8_t i=0; i<frame->DLC; i++) {
+            slcan_frame[slcan_frame_len++] = hex[(frame->data[i]>>4)&0xf];
+            slcan_frame[slcan_frame_len++] = hex[frame->data[i]&0xf];
+        }
+    }
+
+    if (instance->timestamp_enable) {
+        // TODO use rx timestamp
+        uint32_t millis_mod_60k = millis() % 60000;
+        for (uint8_t i=0; i<4; i++) {
+            slcan_frame[slcan_frame_len++] = hex[(millis_mod_60k>>((3-i)*4))&0xf];
+        }
+    }
+
+    if (instance->flags_enable && loopback) {
+        slcan_frame[slcan_frame_len++] = 'L';
+    }
+
+    slcan_frame[slcan_frame_len++] = '\r';
+
+    return slcan_frame_len;
+}
+
 static void process_slcan_cmd(struct slcan_instance_s* instance, size_t cmd_len) {
+// #ifdef MODULE_UAVCAN_DEBUG_ENABLED
+//     uavcan_send_debug_msg(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_DEBUG, "SLCAN", "PROC: %c cmd, len=%u", instance->cmd_buf[0], (unsigned)cmd_len);
+// #endif
+
     // Unsupported commands that are just ACKed
     switch(instance->cmd_buf[0]) {
         case 'C': // Close CAN channel
@@ -120,7 +184,7 @@ static void process_slcan_cmd(struct slcan_instance_s* instance, size_t cmd_len)
         // check if cmd is long enough to contain DLC
         // note: cmd_len does not include \r
         if (cmd_len < data_begin_idx || (frame.IDE && cmd_len < data_begin_idx)) {
-            chnWriteTimeout(&SDU1, (uint8_t*)"\a", 1, chTimeMS2I(50));
+            chnWriteTimeout(&SDU1, (uint8_t*)"\a", 1, TIME_IMMEDIATE);
             return;
         }
 
@@ -205,33 +269,60 @@ static void process_slcan_cmd(struct slcan_instance_s* instance, size_t cmd_len)
         } else {
             chnWriteTimeout(&SDU1, (uint8_t*)"z\r", 2, TIME_IMMEDIATE);
         }
+
+#ifdef SLCAN_DIRECT_LOOPBACK_DEBUG
+        // Echo the processed frame back to the host
+        char slcan_frame[64];
+        size_t slcan_frame_len = can_frame_to_slcan(instance, &frame, slcan_frame, sizeof(slcan_frame), true);
+
+        chnWriteTimeout(&SDU1, (uint8_t*)slcan_frame, slcan_frame_len, TIME_IMMEDIATE);
+#endif
     }
+
+
 }
 
-static void usb_rx_timer_task_func(struct worker_thread_timer_task_s* task) {
-    struct slcan_instance_s* instance = worker_thread_task_get_user_context(task);
+static THD_FUNCTION(slcan_rx_thread, arg) {
+    struct slcan_instance_s* instance = arg;
+    chRegSetThreadName("slcan_rx");
 
     while (true) {
-        instance->cmd_buf_len += chnReadTimeout(&SDU1, (uint8_t*)&instance->cmd_buf[instance->cmd_buf_len], sizeof(instance->cmd_buf)-instance->cmd_buf_len, TIME_IMMEDIATE);
-
-        size_t cmd_len = 0;
-        for (size_t i=0; i<instance->cmd_buf_len; i++) {
-            if (instance->cmd_buf[i] == '\r') {
-                cmd_len = i+1;
-                break;
-            }
+        if (USBD1.state != USB_ACTIVE) {
+            instance->cmd_buf_len = 0;
+            chThdSleepMilliseconds(50);
+            continue;
         }
 
-        if (cmd_len != 0) {
-            process_slcan_cmd(instance, cmd_len-1);
-            instance->cmd_buf_len -= cmd_len;
-            memmove(instance->cmd_buf, instance->cmd_buf+cmd_len, instance->cmd_buf_len);
-        } else {
-            if (instance->cmd_buf_len == sizeof(instance->cmd_buf) || USBD1.state != USB_ACTIVE) {
-                // buffer is full, just discard it
-                instance->cmd_buf_len = 0;
+        size_t space = sizeof(instance->cmd_buf) - instance->cmd_buf_len;
+        if (space == 0) {
+            instance->cmd_buf_len = 0;
+            space = sizeof(instance->cmd_buf);
+        }
+
+        size_t n = chnReadTimeout(&SDU1, (uint8_t*)&instance->cmd_buf[instance->cmd_buf_len], space, TIME_MS2I(1));
+        instance->cmd_buf_len += n;
+
+        // Process all complete commands in the buffer
+        while (instance->cmd_buf_len > 0) {
+            size_t cmd_len = 0;
+            for (size_t i=0; i<instance->cmd_buf_len; i++) {
+                if (instance->cmd_buf[i] == '\r') {
+                    cmd_len = i+1;
+                    break;
+                }
             }
-            break;
+
+            if (cmd_len != 0) {
+                process_slcan_cmd(instance, cmd_len-1);
+                instance->cmd_buf_len -= cmd_len;
+                memmove(instance->cmd_buf, instance->cmd_buf+cmd_len, instance->cmd_buf_len);
+            } else {
+                // No complete command found
+                if (instance->cmd_buf_len == sizeof(instance->cmd_buf) || USBD1.state != USB_ACTIVE) {
+                    instance->cmd_buf_len = 0;
+                }
+                break;
+            }
         }
     }
 }
@@ -247,56 +338,12 @@ static void can_rx_listener_task_func(size_t buf_size, const void* buf, void* ct
 
     const struct can_rx_frame_s* rx_frame = buf;
 
-    const struct can_frame_s* frame = &rx_frame->content;
-
     if (!instance->loopback_enable && rx_frame->origin == CAN_FRAME_ORIGIN_BRIDGE) {
         return;
     }
 
-    const char *hex = "0123456789ABCDEF";
-
     char slcan_frame[64];
-    size_t slcan_frame_len = 1;
+    size_t slcan_frame_len = can_frame_to_slcan(instance, &rx_frame->content, slcan_frame, sizeof(slcan_frame), rx_frame->origin == CAN_FRAME_ORIGIN_BRIDGE);
 
-    if (frame->RTR) {
-        slcan_frame[0] = 'r';
-    } else {
-        slcan_frame[0] = 't';
-    }
-
-    if (frame->IDE) {
-        slcan_frame[0] = ascii_toupper(slcan_frame[0]);
-        for (uint8_t i=0; i<8; i++) {
-            slcan_frame[slcan_frame_len++] = hex[(frame->EID >> ((7-i)*4))&0xf];
-        }
-    } else {
-        for (uint8_t i=0; i<3; i++) {
-            slcan_frame[slcan_frame_len++] = hex[(frame->SID >> ((2-i)*4))&0xf];
-        }
-    }
-
-    slcan_frame[slcan_frame_len++] = hex[frame->DLC];
-
-    if (!frame->RTR) {
-        for (uint8_t i=0; i<frame->DLC; i++) {
-            slcan_frame[slcan_frame_len++] = hex[(frame->data[i]>>4)&0xf];
-            slcan_frame[slcan_frame_len++] = hex[frame->data[i]&0xf];
-        }
-    }
-
-    if (instance->timestamp_enable) {
-        // TODO use rx timestamp
-        uint32_t millis_mod_60k = millis() % 60000;
-        for (uint8_t i=0; i<4; i++) {
-            slcan_frame[slcan_frame_len++] = hex[(millis_mod_60k>>((3-i)*4))&0xf];
-        }
-    }
-
-    if (instance->flags_enable && rx_frame->origin == CAN_FRAME_ORIGIN_BRIDGE) {
-        slcan_frame[slcan_frame_len++] = 'L';
-    }
-
-    slcan_frame[slcan_frame_len++] = '\r';
-
-    chnWriteTimeout(&SDU1, (uint8_t*)slcan_frame, slcan_frame_len, chTimeMS2I(10));
+    chnWriteTimeout(&SDU1, (uint8_t*)slcan_frame, slcan_frame_len, TIME_IMMEDIATE);
 }

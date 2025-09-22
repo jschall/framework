@@ -19,7 +19,7 @@ extern "C" {
     #endif
 
     extern const USBConfig usbcfg;
-    extern SerialUSBConfig serusbcfg;
+    extern const SerialUSBConfig serusbcfg;
     extern SerialUSBDriver SDU1;
 
     void setup_usb_strings(void);
