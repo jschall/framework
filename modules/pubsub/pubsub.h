@@ -84,6 +84,11 @@ void pubsub_listener_set_handler_cb(struct pubsub_listener_s* listener, pubsub_m
 void pubsub_publish_message(struct pubsub_topic_s* topic, size_t size, pubsub_message_writer_func_ptr writer_cb, void* ctx);
 void pubsub_copy_writer_func(size_t msg_size, void* msg, void* ctx);
 
+// ISR-safe, non-blocking publish. Returns false if no listeners or insufficient
+// memory in the topic group's allocator. Does not delete old messages to make
+// room. Safe to call from interrupt context.
+bool pubsub_try_publish_message_I(struct pubsub_topic_s* topic, size_t size, pubsub_message_writer_func_ptr writer_cb, void* ctx);
+
 // - Unregisters a listener from its topic.
 void pubsub_listener_unregister(struct pubsub_listener_s* listener);
 

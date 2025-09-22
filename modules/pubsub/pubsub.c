@@ -87,6 +87,45 @@ void pubsub_copy_writer_func(size_t msg_size, void* msg, void* ctx) {
     memcpy(msg, ctx, msg_size);
 }
 
+bool pubsub_try_publish_message_I(struct pubsub_topic_s* topic, size_t size, pubsub_message_writer_func_ptr writer_cb, void* ctx) {
+    if (!topic || !topic->group || !topic->listener_list_head) {
+        return false;
+    }
+
+    chSysLockFromISR();
+    struct pubsub_message_s* message = fifoallocator_allocate(&topic->group->allocator, size+sizeof(struct pubsub_message_s));
+    if (!message) {
+        chSysUnlockFromISR();
+        return false;
+    }
+
+    message->topic = topic;
+    message->next_in_topic = NULL;
+
+    if (writer_cb) {
+        writer_cb(size, message->data, ctx);
+    }
+
+    if (topic->message_list_tail) {
+        topic->message_list_tail->next_in_topic = message;
+    }
+    topic->message_list_tail = message;
+
+    struct pubsub_listener_s* listener = topic->listener_list_head;
+    while (listener) {
+        if (!listener->next_message) {
+            listener->next_message = message;
+        }
+        if (listener->waiting_thread_reference_ptr) {
+            chThdResumeI(listener->waiting_thread_reference_ptr, (msg_t)listener);
+        }
+        listener = listener->next;
+    }
+
+    chSysUnlockFromISR();
+    return true;
+}
+
 static void pubsub_delete_message_S(struct pubsub_message_s* message_to_delete) {
     struct pubsub_listener_s* listener = message_to_delete->topic->listener_list_head;
 
