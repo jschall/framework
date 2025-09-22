@@ -8,9 +8,6 @@
 
 // #pragma GCC optimize("O0")
 
-/*
-  this driver has been tested with STM32F427 and STM32F412
- */
 #define FLASH_WORD_SIZE 32U
 
 #ifndef BOARD_FLASH_SIZE
@@ -106,7 +103,7 @@ uint32_t flash_get_page_ofs(uint32_t page)
 uint32_t stm32_flash_getpagesize(uint32_t page)
 {
     (void)page;
-    return STM32_FLASH_FIXED_PAGE_SIZE;
+    return STM32_FLASH_FIXED_PAGE_SIZE*1024U;
 }
 
 
@@ -228,14 +225,14 @@ bool flash_write(void* address, volatile uint8_t num_bufs, struct flash_write_bu
     // clear previous errors
     *SR = 0x1FEF000E;
 
-    *CR = FLASH_CR_PSIZE_0;
+    *CR = FLASH_CR_PSIZE_1;
 
     bool success = true;
     uint32_t* target_word_ptr = address;
     uint8_t buf_idx = 0;
     size_t buf_data_idx = 0;
 
-    while (buf_data_idx >= bufs[buf_idx].len) {
+    while (buf_idx < num_bufs && buf_data_idx >= bufs[buf_idx].len) {
         buf_idx++;
     }
 
@@ -253,7 +250,7 @@ bool flash_write(void* address, volatile uint8_t num_bufs, struct flash_write_bu
             }
             source_value.bytes_value[i] = ((uint8_t*)bufs[buf_idx].data)[buf_data_idx];
             buf_data_idx++;
-            while (buf_data_idx >= bufs[buf_idx].len) {
+            while (buf_idx < num_bufs && buf_data_idx >= bufs[buf_idx].len) {
                 buf_idx++;
                 buf_data_idx = 0;
             }
@@ -261,11 +258,14 @@ bool flash_write(void* address, volatile uint8_t num_bufs, struct flash_write_bu
         *CCR = ~0;
         *CR |= FLASH_CR_PG;
         for (uint8_t i=0; i<FLASH_WORD_SIZE/4; i++) {
-            while (*SR & (FLASH_SR_BSY|FLASH_SR_QW));
             target_word_ptr[i] = source_value.word_value[i];
         }
 
         __DSB();
+        if (!(*SR & FLASH_SR_QW)) {
+            success = false;
+            goto failed;
+        }
         stm32_flash_wait_idle();
         *CCR = ~0;
 
@@ -292,6 +292,52 @@ failed:
     stm32_flash_lock();
 
     return success;
+}
+
+#include <core_cm7.h>
+bool flash_check_word_ecc(const void* address, bool* single_bit_corrected, bool* double_bit_error)
+{
+    if (((uintptr_t)address % FLASH_WORD_SIZE) != 0) {
+        return false;
+    }
+
+    volatile uint32_t *SR, *CCR;
+    if (((uint32_t)address - STM32_FLASH_BASE) < (8 * STM32_FLASH_FIXED_PAGE_SIZE * 1024)) {
+        SR = &FLASH->SR1;
+        CCR = &FLASH->CCR1;
+    } else {
+        SR = &FLASH->SR2;
+        CCR = &FLASH->CCR2;
+    }
+
+    // Temporarily disable precise BusFaults during the read
+    uint32_t saved_SHCSR = SCB->SHCSR;
+    SCB->SHCSR &= ~SCB_SHCSR_BUSFAULTENA_Msk;
+    __DSB(); __ISB();
+
+    volatile const uint32_t* ptr = (const uint32_t*)address;
+    (void)ptr[0]; (void)ptr[1]; (void)ptr[2]; (void)ptr[3];
+    (void)ptr[4]; (void)ptr[5]; (void)ptr[6]; (void)ptr[7];
+
+    __DSB();
+    // Re-enable BusFaults
+    SCB->SHCSR = saved_SHCSR;
+    __DSB(); __ISB();
+
+    uint32_t sr = *SR;
+    bool snecc = (sr & FLASH_SR_SNECCERR) != 0;
+    bool dbecc = (sr & FLASH_SR_DBECCERR) != 0;
+
+    if (single_bit_corrected) *single_bit_corrected = snecc;
+    if (double_bit_error) *double_bit_error = dbecc;
+
+    if (snecc || dbecc) {
+        // Clear ECC flags
+        *CCR = FLASH_CCR_CLR_SNECCERR | FLASH_CCR_CLR_DBECCERR;
+    }
+
+    // return false only on double-bit error
+    return !dbecc;
 }
 
 #endif // defined(STM32H7)

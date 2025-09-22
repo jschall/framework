@@ -26,7 +26,7 @@ typedef uint16_t flash_word_t;
 #define STM32_FLASH_BANK2_START (STM32_FLASH_BASE+0x00080000)
 
 #if defined(STM32F4) && BOARD_FLASH_SIZE == 512
-#define STM32_FLASH_NPAGES  7
+#define STM32_FLASH_NPAGES  8
 static const uint32_t flash_memmap[STM32_FLASH_NPAGES] = {
     KB(16), KB(16), KB(16), KB(16), KB(64),
     KB(128), KB(128), KB(128)
@@ -252,7 +252,7 @@ bool flash_write(void* address, volatile uint8_t num_bufs, struct flash_write_bu
     uint8_t buf_idx = 0;
     size_t buf_data_idx = 0;
 
-    while (buf_data_idx >= bufs[buf_idx].len) {
+    while (buf_idx < num_bufs && buf_data_idx >= bufs[buf_idx].len) {
         buf_idx++;
     }
 
@@ -270,7 +270,7 @@ bool flash_write(void* address, volatile uint8_t num_bufs, struct flash_write_bu
             }
             source_word.bytes_value[i] = ((uint8_t*)bufs[buf_idx].data)[buf_data_idx];
             buf_data_idx++;
-            while (buf_data_idx >= bufs[buf_idx].len) {
+            while (buf_idx < num_bufs && buf_data_idx >= bufs[buf_idx].len) {
                 buf_idx++;
                 buf_data_idx = 0;
             }
