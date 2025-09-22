@@ -42,21 +42,28 @@
 #ifdef MODULE_LOAD_MEASUREMENT_ENABLED
 #define CH_CFG_IDLE_ENTER_HOOK() {                                          \
     extern systime_t idle_enter_t;                                          \
+    extern volatile uint32_t idle_active;                                   \
     idle_enter_t = chVTGetSystemTimeX();                                    \
+    idle_active = 1;                                                        \
 }
 
 #define CH_CFG_IDLE_LEAVE_HOOK() {                                          \
     extern systime_t idle_enter_t;                                          \
     extern systime_t idle_total_ticks;                                      \
+    extern volatile uint32_t idle_active;                                   \
     idle_total_ticks += chVTGetSystemTimeX()-idle_enter_t;                  \
+    idle_active = 0;                                                        \
 }
 
 /* IRQ time accounting hooks */
 #define CH_CFG_IRQ_PROLOGUE_HOOK() {                                        \
     extern volatile systime_t irq_enter_t;                                  \
     extern volatile uint32_t irq_nesting;                                   \
+    extern volatile uint32_t irq_entered_from_idle;                         \
+    extern volatile uint32_t idle_active;                                   \
     if (irq_nesting++ == 0) {                                               \
         irq_enter_t = chVTGetSystemTimeX();                                 \
+        irq_entered_from_idle = idle_active;                                \
     }                                                                        \
 }
 
@@ -64,8 +71,17 @@
     extern volatile systime_t irq_enter_t;                                  \
     extern volatile systime_t irq_total_ticks;                              \
     extern volatile uint32_t irq_nesting;                                   \
+    extern volatile uint32_t irq_entered_from_idle;                         \
+    extern volatile systime_t irq_in_idle_total_ticks;                      \
+    extern volatile systime_t irq_in_thread_total_ticks;                    \
     if (--irq_nesting == 0) {                                               \
-        irq_total_ticks += chVTGetSystemTimeX() - irq_enter_t;              \
+        systime_t _dt = chVTGetSystemTimeX() - irq_enter_t;                 \
+        irq_total_ticks += _dt;                                             \
+        if (irq_entered_from_idle) {                                        \
+            irq_in_idle_total_ticks += _dt;                                 \
+        } else {                                                            \
+            irq_in_thread_total_ticks += _dt;                               \
+        }                                                                   \
     }                                                                        \
 }
 #endif
