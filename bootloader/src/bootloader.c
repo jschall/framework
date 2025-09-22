@@ -14,6 +14,7 @@
 #include <uavcan.protocol.file.Read.h>
 #include <uavcan.protocol.RestartNode.h>
 #include <uavcan.protocol.GetNodeInfo.h>
+#include <faults.h>
 
 #ifdef MODULE_UAVCAN_DEBUG_ENABLED
 #include <modules/uavcan_debug/uavcan_debug.h>
@@ -67,6 +68,9 @@ static struct {
     bool image_crc_correct;
     const struct shared_app_parameters_s* shared_app_parameters;
 } app_info;
+
+static bool _boot_disallowed_due_to_ecc;
+
 
 static struct worker_thread_timer_task_s boot_timer_task;
 static struct worker_thread_timer_task_s read_timeout_task;
@@ -391,6 +395,9 @@ static void boot_app_if_commanded(void) {
     if (!get_boot_msg_valid() || boot_msg_id != SHARED_MSG_BOOT) {
         return;
     }
+    if (_boot_disallowed_due_to_ecc) {
+        return;
+    }
 
     union shared_msg_payload_u msg;
     memcpy(&msg.canbus_info, &boot_msg.canbus_info, sizeof(boot_msg.canbus_info));
@@ -405,13 +412,16 @@ static void boot_app_if_commanded(void) {
     SCB->VTOR = (uint32_t)&(app_header->stacktop);
 
     asm volatile(
-        "msr msp, %0	\n"
-        "bx	%1	\n"
+        "msr msp, %0\t\n"
+        "bx\t%1\t\n"
         : : "r"(app_header->stacktop), "r"(app_header->entrypoint) :);
 }
 
 static void command_boot_if_app_valid(uint8_t boot_reason) {
     if (!app_info.image_crc_correct) {
+        return;
+    }
+    if (_boot_disallowed_due_to_ecc) {
         return;
     }
 
@@ -470,6 +480,25 @@ static void on_update_complete(void) {
 // TODO: hook this into early_init
 // TODO: boot_msg module will have to initialize before this runs
 static void bootloader_pre_init(void) {
+    // ECC scan before attempting to boot
+#if defined(STM32H7)
+    void* flash_base = flash_get_page_addr(0);
+    uint32_t bl_region_size = (uint32_t)&_app_flash_sec - (uint32_t)flash_base;
+    uint32_t bl_fail = flash_scan_region_for_ecc(flash_base, bl_region_size);
+    if (bl_fail != 0) {
+        const char* reason = "bootloader ECC double-bit";
+        fault_set("flash_boot_ecc", FAULT_SEVERITY_CRITICAL, reason);
+        _boot_disallowed_due_to_ecc = true;
+    }
+
+    uint32_t app_fail = flash_scan_region_for_ecc(_app_flash_sec, get_app_sec_size());
+    if (app_fail != 0) {
+        const char* reason = "application ECC double-bit";
+        fault_set("flash_app_ecc", FAULT_SEVERITY_CRITICAL, reason);
+        _boot_disallowed_due_to_ecc = true; // do not boot; allow overwrite
+    }
+#endif
+
     boot_app_if_commanded();
 }
 
