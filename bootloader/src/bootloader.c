@@ -486,15 +486,13 @@ static void bootloader_pre_init(void) {
     uint32_t bl_region_size = (uint32_t)&_app_flash_sec - (uint32_t)flash_base;
     uint32_t bl_fail = flash_scan_region_for_ecc(flash_base, bl_region_size);
     if (bl_fail != 0) {
-        const char* reason = "bootloader ECC double-bit";
-        fault_set("flash_boot_ecc", FAULT_SEVERITY_CRITICAL, reason);
+        fault_set("bl_ecc", FAULT_SEVERITY_CRITICAL, "");
         _boot_disallowed_due_to_ecc = true;
     }
 
     uint32_t app_fail = flash_scan_region_for_ecc(_app_flash_sec, get_app_sec_size());
     if (app_fail != 0) {
-        const char* reason = "application ECC double-bit";
-        fault_set("flash_app_ecc", FAULT_SEVERITY_CRITICAL, reason);
+        fault_set("app_ecc", FAULT_SEVERITY_CRITICAL, "");
         _boot_disallowed_due_to_ecc = true; // do not boot; allow overwrite
     }
 #endif
