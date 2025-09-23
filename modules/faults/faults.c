@@ -49,7 +49,26 @@ static fault_flag_t* ensure_flag(const char* name) {
     return f;
 }
 
+static fault_flag_t* ensure_flag_I(const char* name) {
+    fault_flag_t* f = find_flag(name);
+    if (f) return f;
+    f = chCoreAllocI(sizeof(fault_flag_t));
+    if (!f) return NULL;
+    f->name = name;
+    f->severity = UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
+    f->reason = NULL;
+    f->expiry_begin_systime = 0;
+    f->expiry_duration_ticks = TIME_INFINITE;
+    f->next = faults_head;
+    faults_head = f;
+    return f;
+}
+
 static void update_node_health(void) {
+    set_node_health(fault_get_severity());
+}
+
+static void update_node_health_I(void) {
     set_node_health(fault_get_severity());
 }
 
@@ -112,6 +131,17 @@ void fault_set(const char* name, uint8_t severity, const char* reason) {
     f->reason = reason;
     f->expiry_duration_ticks = TIME_INFINITE;
     update_node_health();
+}
+
+void fault_set_I(const char* name, uint8_t severity, const char* reason) {
+    chDbgCheckClassI();
+
+    fault_flag_t* f = ensure_flag_I(name);
+    if (!f) return;
+    f->severity = severity;
+    f->reason = reason;
+    f->expiry_duration_ticks = TIME_INFINITE;
+    update_node_health_I();
 }
 
 void fault_set_timeout(const char* name, uint8_t severity, uint32_t timeout_ms, const char* reason) {

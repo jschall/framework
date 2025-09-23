@@ -822,8 +822,20 @@
   /* Trace code here.*/                                                     \
 }
 
+#ifndef __ASSEMBLER__
+#include <faults.h>
 #ifndef CH_CFG_CORE_ALLOCATOR_FAILURE_HOOK
-#define CH_CFG_CORE_ALLOCATOR_FAILURE_HOOK() {}
+#define CH_CFG_CORE_ALLOCATOR_FAILURE_HOOK() {                      \
+  fault_set_I("core_alloc_fail", FAULT_SEVERITY_CRITICAL, ""); \
+}
+#endif
+
+
+#ifndef CH_CFG_STACK_OVERFLOW_HOOK
+#define CH_CFG_STACK_OVERFLOW_HOOK(tp) {                                              \
+  fault_set_I("stack_overflow", FAULT_SEVERITY_CRITICAL, "");                                                 \
+}
+#endif
 #endif
 
 /** @} */

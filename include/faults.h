@@ -21,6 +21,7 @@ uint8_t fault_get_flag_severity(const char* name);
 
 // Set/clear/change severity
 void fault_set(const char* name, uint8_t severity, const char* reason);
+void fault_set_I(const char* name, uint8_t severity, const char* reason);
 void fault_set_timeout(const char* name, uint8_t severity, uint32_t timeout_ms, const char* reason);
 void fault_clear(const char* name);
 void fault_set_severity(const char* name, uint8_t severity);
