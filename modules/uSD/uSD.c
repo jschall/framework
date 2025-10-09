@@ -63,7 +63,7 @@ static bool try_reformat(void) {
 
 // Configure default severity if not provided in framework_conf.h
 #ifndef USD_FAULT_SEVERITY
-#define USD_FAULT_SEVERITY UAVCAN_PROTOCOL_NODESTATUS_HEALTH_ERROR
+#define USD_FAULT_SEVERITY FAULT_SEVERITY_ERROR
 #endif
 
 static struct worker_thread_timer_task_s usd_init_task;
