@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <chprintf.h>
+#include <math.h>
 
 // FATFS types/functions are available via modules/uSD/uSD.h
 
@@ -48,9 +49,19 @@ PUBSUB_TOPIC_GROUP_DECLARE_EXTERN(LOGGER_PUBSUB_TOPIC_GROUP)
 #define LOGGER_MAX_SUFFIX_LEN 3
 #endif
 
-#ifndef LOGGER_FMT_SET_SIZE
-#define LOGGER_FMT_SET_SIZE 16
-#endif
+// ArduPilot binary log format constants
+#define AP_HEAD_BYTE1 0xA3
+#define AP_HEAD_BYTE2 0x95
+#define AP_FMT_MSG_ID 0x80
+
+// Maximum lengths for FMT message fields
+#define AP_MAX_NAME_LEN 4
+#define AP_MAX_FORMAT_LEN 16
+#define AP_MAX_LABELS_LEN 64
+
+// Maximum number of message types per file
+#define AP_MAX_MESSAGE_TYPES 256
+
 
 struct logger_msg_s {
 	char prefix[LOGGER_MAX_PREFIX_LEN+1];
@@ -65,18 +76,363 @@ struct open_file_s {
 	FIL fp;
 	uint32_t index;
 	uint64_t bytes_written;
-	uint32_t fmt_hashes[LOGGER_FMT_SET_SIZE];
 	struct open_file_s* next;
 };
 
 MEMORYPOOL_DECL(logger_open_file_pool, sizeof(struct open_file_s), PORT_NATURAL_ALIGN, chCoreAllocAlignedI);
 static struct open_file_s* open_file_list_head;
 
+// ArduPilot message type tracking
+struct ap_message_type_s {
+    char name[AP_MAX_NAME_LEN + 1];
+    char format[AP_MAX_FORMAT_LEN + 1];
+    char labels[AP_MAX_LABELS_LEN + 1];
+    uint8_t id;
+    uint8_t message_size;
+    bool registered;
+};
+
+struct ap_file_context_s {
+    char prefix[LOGGER_MAX_PREFIX_LEN + 1];
+    char suffix[LOGGER_MAX_SUFFIX_LEN + 1];
+    struct ap_message_type_s message_types[AP_MAX_MESSAGE_TYPES];
+    uint8_t next_message_id;
+    struct ap_file_context_s* next;
+};
+
+MEMORYPOOL_DECL(logger_ap_file_context_pool, sizeof(struct ap_file_context_s), PORT_NATURAL_ALIGN, chCoreAllocAlignedI);
+static struct ap_file_context_s* ap_file_context_list_head;
+
+
 static struct pubsub_topic_s log_msg_topic;
 static struct worker_thread_listener_task_s log_msg_listener_task;
 static void log_msg_handler(size_t msg_size, const void* buf, void* ctx);
 
-static bool logger_fmt_seen_add(struct open_file_s* f, uint32_t name_hash);
+// ArduPilot logging helper functions
+static uint8_t ap_calculate_message_size(const char* format) {
+    uint8_t size = 3; // header (3 bytes)
+    for (size_t i = 0; format[i] != '\0'; i++) {
+        switch (format[i]) {
+            case 'b': case 'B': size += 1; break; // int8/uint8
+            case 'h': case 'H': size += 2; break; // int16/uint16
+            case 'i': case 'I': size += 4; break; // int32/uint32
+            case 'f':           size += 4; break; // float32
+            case 'd':           size += 8; break; // float64
+            case 'q': case 'Q': size += 8; break; // int64/uint64
+            case 'n':           size += 4; break; // char[4]
+            case 'N':           size += 16; break; // char[16]
+            case 'Z':           size += 64; break; // char[64]
+            case 'c': case 'C': size += 2; break; // int16/uint16 * 100
+            case 'e': case 'E': size += 4; break; // int32/uint32 * 100
+            case 'L':           size += 4; break; // GPS coordinate
+            case 'M':           size += 1; break; // flight mode
+            default:
+                // Invalid format character - return 0 to indicate error
+                return 0;
+        }
+    }
+    return size;
+}
+
+static struct ap_file_context_s* ap_get_or_create_file_context_I(const char* prefix, const char* suffix) {
+    chDbgCheckClassI();
+    struct ap_file_context_s* ctx = ap_file_context_list_head;
+    while (ctx) {
+        if (strncmp(ctx->prefix, prefix, LOGGER_MAX_PREFIX_LEN) == 0 &&
+            strncmp(ctx->suffix, suffix, LOGGER_MAX_SUFFIX_LEN) == 0) {
+            return ctx;
+        }
+        ctx = ctx->next;
+    }
+
+    // Create new context (I-class allocation)
+    ctx = chPoolAllocI(&logger_ap_file_context_pool);
+    if (!ctx) {
+        chPoolAddI(&logger_ap_file_context_pool, chCoreAllocAlignedI(sizeof(struct ap_file_context_s), PORT_NATURAL_ALIGN));
+        ctx = chPoolAllocI(&logger_ap_file_context_pool);
+    }
+    if (!ctx) {
+        return NULL;
+    }
+
+    memset(ctx, 0, sizeof(*ctx));
+    strncpy(ctx->prefix, prefix, LOGGER_MAX_PREFIX_LEN);
+    strncpy(ctx->suffix, suffix, LOGGER_MAX_SUFFIX_LEN);
+    ctx->next_message_id = 1; // Reserve 0 for special cases
+
+    LINKED_LIST_APPEND(struct ap_file_context_s, ap_file_context_list_head, ctx);
+    return ctx;
+}
+
+static struct ap_file_context_s* ap_get_or_create_file_context(const char* prefix, const char* suffix) {
+    chSysLock();
+    struct ap_file_context_s* ctx = ap_get_or_create_file_context_I(prefix, suffix);
+    chSysUnlock();
+    return ctx;
+}
+
+static struct ap_message_type_s* ap_find_or_register_message_type_I(struct ap_file_context_s* ctx, const char* name, const char* format, const char* labels) {
+    chDbgCheckClassI();
+    // First check if this message type already exists
+    for (size_t i = 0; i < AP_MAX_MESSAGE_TYPES; i++) {
+        if (ctx->message_types[i].id != 0 &&
+            strncmp(ctx->message_types[i].name, name, AP_MAX_NAME_LEN) == 0) {
+            // Check if format/labels match
+            if (strncmp(ctx->message_types[i].format, format, AP_MAX_FORMAT_LEN) == 0 &&
+                strncmp(ctx->message_types[i].labels, labels, AP_MAX_LABELS_LEN) == 0) {
+                return &ctx->message_types[i];
+            } else {
+                // Format/labels changed - this is an error in ArduPilot format
+                return NULL;
+            }
+        }
+    }
+
+    // Find free slot and register new message type
+    for (size_t i = 0; i < AP_MAX_MESSAGE_TYPES; i++) {
+        if (ctx->message_types[i].id == 0) {
+            struct ap_message_type_s* mt = &ctx->message_types[i];
+            memset(mt, 0, sizeof(*mt));
+            strncpy(mt->name, name, AP_MAX_NAME_LEN);
+            strncpy(mt->format, format, AP_MAX_FORMAT_LEN);
+            strncpy(mt->labels, labels, AP_MAX_LABELS_LEN);
+            mt->id = ctx->next_message_id++;
+            mt->message_size = ap_calculate_message_size(format);
+            if (mt->message_size == 0) {
+                return NULL; // Invalid format
+            }
+            mt->registered = false;
+            return mt;
+        }
+    }
+
+    return NULL; // No free slots
+}
+
+static struct ap_message_type_s* ap_find_or_register_message_type(struct ap_file_context_s* ctx, const char* name, const char* format, const char* labels) {
+    chSysLock();
+    struct ap_message_type_s* mt = ap_find_or_register_message_type_I(ctx, name, format, labels);
+    chSysUnlock();
+    return mt;
+}
+
+// Write FMT message for a message type
+static void ap_write_fmt_message(const char* fileprefix, const char* filesuffix, struct ap_message_type_s* mt) {
+    // FMT message structure: 3 header + 1 type + 1 length + 4 name + 16 format + 64 labels = 89 bytes
+    uint8_t fmt_data[89];
+    size_t offset = 0;
+
+    // Write header
+    fmt_data[offset++] = AP_HEAD_BYTE1;
+    fmt_data[offset++] = AP_HEAD_BYTE2;
+    fmt_data[offset++] = AP_FMT_MSG_ID;
+
+    // Write type
+    fmt_data[offset++] = mt->id;
+
+    // Write length
+    fmt_data[offset++] = mt->message_size;
+
+    // Write name (4 chars, null-padded)
+    for (size_t i = 0; i < AP_MAX_NAME_LEN; i++) {
+        fmt_data[offset++] = (i < strlen(mt->name)) ? (uint8_t)mt->name[i] : 0;
+    }
+
+    // Write format (16 chars, null-padded)
+    for (size_t i = 0; i < AP_MAX_FORMAT_LEN; i++) {
+        fmt_data[offset++] = (i < strlen(mt->format)) ? (uint8_t)mt->format[i] : 0;
+    }
+
+    // Write labels (64 chars, null-padded)
+    for (size_t i = 0; i < AP_MAX_LABELS_LEN; i++) {
+        fmt_data[offset++] = (i < strlen(mt->labels)) ? (uint8_t)mt->labels[i] : 0;
+    }
+
+    // Write the FMT message
+    logger_write(fileprefix, filesuffix, fmt_data, sizeof(fmt_data));
+}
+
+static void ap_write_fmt_message_I(const char* fileprefix, const char* filesuffix, struct ap_message_type_s* mt) {
+    chDbgCheckClassI();
+    // FMT message structure: 3 header + 1 type + 1 length + 4 name + 16 format + 64 labels = 89 bytes
+    uint8_t fmt_data[89];
+    size_t offset = 0;
+
+    // Write header
+    fmt_data[offset++] = AP_HEAD_BYTE1;
+    fmt_data[offset++] = AP_HEAD_BYTE2;
+    fmt_data[offset++] = AP_FMT_MSG_ID;
+
+    // Write type
+    fmt_data[offset++] = mt->id;
+
+    // Write length
+    fmt_data[offset++] = mt->message_size;
+
+    // Write name (4 chars, null-padded)
+    for (size_t i = 0; i < AP_MAX_NAME_LEN; i++) {
+        fmt_data[offset++] = (i < strlen(mt->name)) ? (uint8_t)mt->name[i] : 0;
+    }
+
+    // Write format (16 chars, null-padded)
+    for (size_t i = 0; i < AP_MAX_FORMAT_LEN; i++) {
+        fmt_data[offset++] = (i < strlen(mt->format)) ? (uint8_t)mt->format[i] : 0;
+    }
+
+    // Write labels (64 chars, null-padded)
+    for (size_t i = 0; i < AP_MAX_LABELS_LEN; i++) {
+        fmt_data[offset++] = (i < strlen(mt->labels)) ? (uint8_t)mt->labels[i] : 0;
+    }
+
+    // Write the FMT message using the I-class path
+    logger_write_I(fileprefix, filesuffix, fmt_data, sizeof(fmt_data));
+}
+
+// Encode data according to format string into binary buffer
+static size_t ap_encode_message_data(uint8_t* buffer, size_t buffer_size, const char* format, va_list args) {
+    size_t offset = 3; // Skip header (written by caller)
+
+    for (size_t i = 0; format[i] != '\0'; i++) {
+        if (offset >= buffer_size) {
+            return 0; // Buffer overflow
+        }
+
+        switch (format[i]) {
+            case 'b': { // int8
+                int8_t value = (int8_t)va_arg(args, int);
+                buffer[offset++] = (uint8_t)value;
+                break;
+            }
+            case 'B': { // uint8
+                uint8_t value = (uint8_t)va_arg(args, unsigned int);
+                buffer[offset++] = value;
+                break;
+            }
+            case 'h': { // int16
+                int16_t value = (int16_t)va_arg(args, int);
+                buffer[offset++] = (uint8_t)(value & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 8) & 0xFF);
+                break;
+            }
+            case 'H': { // uint16
+                uint16_t value = (uint16_t)va_arg(args, unsigned int);
+                buffer[offset++] = (uint8_t)(value & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 8) & 0xFF);
+                break;
+            }
+            case 'i': { // int32
+                int32_t value = va_arg(args, int32_t);
+                buffer[offset++] = (uint8_t)(value & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 8) & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 16) & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 24) & 0xFF);
+                break;
+            }
+            case 'I': { // uint32
+                uint32_t value = va_arg(args, uint32_t);
+                buffer[offset++] = (uint8_t)(value & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 8) & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 16) & 0xFF);
+                buffer[offset++] = (uint8_t)((value >> 24) & 0xFF);
+                break;
+            }
+            case 'f': { // float32
+                float value = (float)va_arg(args, double);
+                uint32_t int_value;
+                memcpy(&int_value, &value, sizeof(float));
+                buffer[offset++] = (uint8_t)(int_value & 0xFF);
+                buffer[offset++] = (uint8_t)((int_value >> 8) & 0xFF);
+                buffer[offset++] = (uint8_t)((int_value >> 16) & 0xFF);
+                buffer[offset++] = (uint8_t)((int_value >> 24) & 0xFF);
+                break;
+            }
+            case 'd': { // float64
+                double value = va_arg(args, double);
+                uint64_t int_value;
+                memcpy(&int_value, &value, sizeof(double));
+                for (size_t j = 0; j < 8; j++) {
+                    buffer[offset++] = (uint8_t)(int_value & 0xFF);
+                    int_value >>= 8;
+                }
+                break;
+            }
+            case 'q': { // int64
+                int64_t value = va_arg(args, int64_t);
+                for (size_t j = 0; j < 8; j++) {
+                    buffer[offset++] = (uint8_t)(value & 0xFF);
+                    value >>= 8;
+                }
+                break;
+            }
+            case 'Q': { // uint64
+                uint64_t value = va_arg(args, uint64_t);
+                for (size_t j = 0; j < 8; j++) {
+                    buffer[offset++] = (uint8_t)(value & 0xFF);
+                    value >>= 8;
+                }
+                break;
+            }
+            case 'n': case 'N': case 'Z': { // strings
+                const char* str = va_arg(args, const char*);
+                size_t max_len = (format[i] == 'n') ? 4 : (format[i] == 'N') ? 16 : 64;
+                for (size_t j = 0; j < max_len; j++) {
+                    buffer[offset++] = (j < strlen(str)) ? (uint8_t)str[j] : 0;
+                }
+                break;
+            }
+            case 'c': { // int16 * 100
+                float value = (float)va_arg(args, double);
+                int16_t scaled = (int16_t)roundf(value * 100.0f);
+                buffer[offset++] = (uint8_t)(scaled & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 8) & 0xFF);
+                break;
+            }
+            case 'C': { // uint16 * 100
+                float value = (float)va_arg(args, double);
+                uint16_t scaled = (uint16_t)roundf(value * 100.0f);
+                buffer[offset++] = (uint8_t)(scaled & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 8) & 0xFF);
+                break;
+            }
+            case 'e': { // int32 * 100
+                float value = (float)va_arg(args, double);
+                int32_t scaled = (int32_t)roundf(value * 100.0f);
+                buffer[offset++] = (uint8_t)(scaled & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 8) & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 16) & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 24) & 0xFF);
+                break;
+            }
+            case 'E': { // uint32 * 100
+                float value = (float)va_arg(args, double);
+                uint32_t scaled = (uint32_t)roundf(value * 100.0f);
+                buffer[offset++] = (uint8_t)(scaled & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 8) & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 16) & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 24) & 0xFF);
+                break;
+            }
+            case 'L': { // GPS coordinate (int32 * 1e7)
+                double value = va_arg(args, double);
+                int32_t scaled = (int32_t)round(value * (double)10000000.0);
+                buffer[offset++] = (uint8_t)(scaled & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 8) & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 16) & 0xFF);
+                buffer[offset++] = (uint8_t)((scaled >> 24) & 0xFF);
+                break;
+            }
+            case 'M': { // flight mode (uint8)
+                uint8_t value = (uint8_t)va_arg(args, unsigned int);
+                buffer[offset++] = value;
+                break;
+            }
+            default:
+                return 0; // Invalid format character
+        }
+    }
+
+    return offset; // Return total size written
+}
 
 static bool logger_ensure_base_dir(void) {
 	FATFS* fs = uSD_get_filesystem();
@@ -212,11 +568,10 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 			return NULL;
 		}
 		f->bytes_written = f->fp.fptr;
-		memset(f->fmt_hashes, 0, sizeof(f->fmt_hashes));
 		LINKED_LIST_APPEND(struct open_file_s, open_file_list_head, f);
 	}
 
-	uint64_t needed = (uint64_t)upcoming_write_len + sizeof(uint32_t) + 2;
+	uint64_t needed = (uint64_t)upcoming_write_len;
 	if (f->bytes_written + needed > (uint64_t)LOGGER_ROTATE_BYTES) {
 		f_close(&f->fp);
 		f->index++;
@@ -240,24 +595,10 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 	return f;
 }
 
-static uint16_t logger_crc16(const void* data, size_t len) {
-	return crc16_ccitt(data, len, 0);
-}
 
-static void logger_file_write_record(struct open_file_s* f, const void* payload, uint32_t payload_len) {
-	UINT bw;
-	uint16_t crc = logger_crc16(payload, payload_len);
-	f_write(&f->fp, &payload_len, sizeof(payload_len), &bw);
-	f_write(&f->fp, &crc, sizeof(crc), &bw);
-	f_write(&f->fp, payload, payload_len, &bw);
-	f->bytes_written += sizeof(payload_len) + sizeof(crc) + payload_len;
-    {
-        FRESULT fr = f_sync(&f->fp);
-        if (fr != FR_OK) {
-            LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "sync err %u", (unsigned)fr);
-        }
-    }
-}
+
+
+
 
 static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 	UNUSED(ctx);
@@ -266,46 +607,22 @@ static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 		return;
 	}
 	const struct logger_msg_s* msg = buf;
-	const uint8_t* payload = msg->payload;
 
-	// Check if this is an FMT record
-	bool is_fmt_record = (msg->payload_len >= 3 &&
-	                      payload[0] == 'F' && payload[1] == 'M' && payload[2] == 'T');
-
-	if (is_fmt_record && msg->payload_len >= 7) { // FMT + name4 minimum
-		// Extract message name from FMT record (bytes 3-6)
-		char name4[5] = {0};
-		memcpy(name4, payload + 3, 4);
-
-		// Calculate hash
-		uint64_t hash64 = 0;
-		hash_fnv_1a((uint32_t)strnlen(name4, 4), (const uint8_t*)name4, &hash64);
-		uint32_t hash32 = (uint32_t)(hash64 ^ (hash64 >> 32));
-
-		// Mark as seen in the file's hash table
-		if (!logger_ensure_base_dir()) {
-			LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "no fs");
-			return;
-		}
-		struct open_file_s* of = logger_open_or_get_file(msg->prefix, msg->suffix, msg->payload_len);
-		if (of) {
-			chSysLock();
-			logger_fmt_seen_add(of, hash32);
-			chSysUnlock();
-		}
-	}
-
-	// Write the record to file (FMT or data record)
+	// Write the raw data to file
 	if (!logger_ensure_base_dir()) {
-		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "no fs");
+		// LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "no fs");
 		return;
 	}
+
 	struct open_file_s* of = logger_open_or_get_file(msg->prefix, msg->suffix, msg->payload_len);
 	if (!of) {
 		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "open fail %s.%s", msg->prefix, msg->suffix);
 		return;
 	}
-	logger_file_write_record(of, msg->payload, msg->payload_len);
+
+	UINT bw;
+	f_write(&of->fp, msg->payload, msg->payload_len, &bw);
+	of->bytes_written += msg->payload_len;
 }
 
 RUN_ON(PUBSUB_TOPIC_INIT) {
@@ -351,6 +668,7 @@ bool logger_write_I(const char* fileprefix, const char* filesuffix, const void* 
 	if (!fileprefix || !filesuffix || !data || data_len == 0) {
 		return false;
 	}
+	chDbgCheckClassI();
 	struct logger_msg_s header;
 	memset(&header, 0, sizeof(header));
 	strncpy(header.prefix, fileprefix, LOGGER_MAX_PREFIX_LEN);
@@ -363,237 +681,90 @@ bool logger_write_I(const char* fileprefix, const char* filesuffix, const void* 
 	return pubsub_try_publish_message_I(&log_msg_topic, sizeof(struct logger_msg_s) + data_len, logger_header_payload_writer, &pack_ctx);
 }
 
-#ifndef LOGGER_FMT_SET_SIZE
-#define LOGGER_FMT_SET_SIZE 16
-#endif
 
-static bool logger_fmt_seen_add(struct open_file_s* f, uint32_t name_hash) {
-	for (size_t i=0; i<LOGGER_FMT_SET_SIZE; i++) {
-		if (f->fmt_hashes[i] == name_hash) {
-			return true;
-		}
-	}
-	for (size_t i=0; i<LOGGER_FMT_SET_SIZE; i++) {
-		if (f->fmt_hashes[i] == 0) {
-			f->fmt_hashes[i] = name_hash;
-			return false;
-		}
-	}
-	return true;
-}
-
-static void logger_pack_and_write_ap(const char* prefix, const char* suffix, const char* name, const char* format, const char* labels, va_list ap) {
-	if (!name || !format || !labels) {
-		return;
-	}
-	char name4[4] = {0,0,0,0};
-	strncpy(name4, name, 4);
-	uint64_t hash64 = 0;
-	hash_fnv_1a((uint32_t)strnlen(name4,4), (const uint8_t*)name4, &hash64);
-	uint32_t hash32 = (uint32_t)(hash64 ^ (hash64>>32));
-
-	struct open_file_s* of = logger_open_or_get_file(prefix, suffix, 0);
-	if (!of) {
-		return;
-	}
-	bool already_seen = logger_fmt_seen_add(of, hash32);
-	if (!already_seen) {
-		char fmt_hdr[3] = { 'F','M','T' };
-		size_t fmt_len = strlen(format)+1;
-		size_t labels_len = strlen(labels)+1;
-		size_t payload_len = sizeof(fmt_hdr) + sizeof(name4) + fmt_len + labels_len;
-		uint8_t* payload = chCoreAlloc(payload_len);
-		if (payload) {
-			uint8_t* p = payload;
-			memcpy(p, fmt_hdr, sizeof(fmt_hdr)); p += sizeof(fmt_hdr);
-			memcpy(p, name4, sizeof(name4)); p += sizeof(name4);
-			memcpy(p, format, fmt_len); p += fmt_len;
-			memcpy(p, labels, labels_len);
-			logger_file_write_record(of, payload, (uint32_t)payload_len);
-		}
-	}
-
-	size_t packed_size = sizeof(name4);
-	for (const char* f = format; *f; f++) {
-		switch (*f) {
-			case 'b': case 'B': packed_size += 1; break;
-			case 'h': case 'H': packed_size += 2; break;
-			case 'i': case 'I': packed_size += 4; break;
-			case 'L': packed_size += 4; break;
-			case 'q': case 'Q': packed_size += 8; break;
-			case 'f': packed_size += 4; break;
-			case 'd': packed_size += 8; break;
-			default: break;
-		}
-	}
-	uint8_t* payload = chCoreAlloc(packed_size);
-	if (!payload) {
-		return;
-	}
-	uint8_t* p = payload;
-	memcpy(p, name4, sizeof(name4));
-	p += sizeof(name4);
-	for (const char* f = format; *f; f++) {
-		switch (*f) {
-			case 'b': { int v = va_arg(ap, int); int8_t x = (int8_t)v; memcpy(p, &x, 1); p += 1; break; }
-			case 'B': { int v = va_arg(ap, int); uint8_t x = (uint8_t)v; memcpy(p, &x, 1); p += 1; break; }
-			case 'h': { int v = va_arg(ap, int); int16_t x = (int16_t)v; memcpy(p, &x, 2); p += 2; break; }
-			case 'H': { int v = va_arg(ap, int); uint16_t x = (uint16_t)v; memcpy(p, &x, 2); p += 2; break; }
-			case 'i': { int32_t x = va_arg(ap, int32_t); memcpy(p, &x, 4); p += 4; break; }
-			case 'I': { uint32_t x = va_arg(ap, uint32_t); memcpy(p, &x, 4); p += 4; break; }
-			case 'L': { uint32_t x = va_arg(ap, uint32_t); memcpy(p, &x, 4); p += 4; break; }
-			case 'q': { int64_t x = va_arg(ap, int64_t); memcpy(p, &x, 8); p += 8; break; }
-			case 'Q': { uint64_t x = va_arg(ap, uint64_t); memcpy(p, &x, 8); p += 8; break; }
-			case 'f': { double v = va_arg(ap, double); float x = (float)v; memcpy(p, &x, 4); p += 4; break; }
-			case 'd': { double x = va_arg(ap, double); memcpy(p, &x, 8); p += 8; break; }
-			default: { (void)va_arg(ap, int); break; }
-		}
-	}
-	logger_file_write_record(of, payload, (uint32_t)packed_size);
-}
 
 void logger_write_ap(const char* fileprefix, const char* filesuffix, const char* name, const char* format, const char* labels, ...) {
-	va_list ap;
-	va_start(ap, labels);
-	logger_pack_and_write_ap(fileprefix, filesuffix, name, format, labels, ap);
-	va_end(ap);
-}
-
-#define LOGGER_AP_MAX_PAYLOAD_SIZE 256
-static uint8_t logger_ap_payload_buffer[LOGGER_AP_MAX_PAYLOAD_SIZE];
-
-#define LOGGER_FMT_MAX_PAYLOAD_SIZE 128
-static uint8_t logger_fmt_payload_buffer[LOGGER_FMT_MAX_PAYLOAD_SIZE];
-
-static void logger_pack_ap_payload(uint8_t* payload, size_t* payload_size, const char* name, const char* format, va_list ap) {
-	if (!name || !format || !payload || !payload_size) {
-		*payload_size = 0;
+	if (!fileprefix || !filesuffix || !name || !format || !labels) {
 		return;
 	}
 
-	char name4[4] = {0,0,0,0};
-	strncpy(name4, name, 4);
-	uint8_t* p = payload;
-	size_t max_size = *payload_size;
-
-	// Reserve space for name4
-	if (max_size < sizeof(name4)) {
-		*payload_size = 0;
-		return;
-	}
-	memcpy(p, name4, sizeof(name4));
-	p += sizeof(name4);
-	size_t used = sizeof(name4);
-
-	// Calculate total packed size first
-	size_t packed_size = sizeof(name4);
-	for (const char* f = format; *f; f++) {
-		switch (*f) {
-			case 'b': case 'B': packed_size += 1; break;
-			case 'h': case 'H': packed_size += 2; break;
-			case 'i': case 'I': packed_size += 4; break;
-			case 'L': packed_size += 4; break;
-			case 'q': case 'Q': packed_size += 8; break;
-			case 'f': packed_size += 4; break;
-			case 'd': packed_size += 8; break;
-			default: break;
-		}
-	}
-
-	if (packed_size > max_size) {
-		*payload_size = 0;
+	// Get or create file context
+	struct ap_file_context_s* ctx = ap_get_or_create_file_context(fileprefix, filesuffix);
+	if (!ctx) {
 		return;
 	}
 
-	// Pack the data
-	for (const char* f = format; *f; f++) {
-		switch (*f) {
-			case 'b': { int v = va_arg(ap, int); int8_t x = (int8_t)v; memcpy(p, &x, 1); p += 1; used += 1; break; }
-			case 'B': { int v = va_arg(ap, int); uint8_t x = (uint8_t)v; memcpy(p, &x, 1); p += 1; used += 1; break; }
-			case 'h': { int v = va_arg(ap, int); int16_t x = (int16_t)v; memcpy(p, &x, 2); p += 2; used += 2; break; }
-			case 'H': { int v = va_arg(ap, int); uint16_t x = (uint16_t)v; memcpy(p, &x, 2); p += 2; used += 2; break; }
-			case 'i': { int32_t x = va_arg(ap, int32_t); memcpy(p, &x, 4); p += 4; used += 4; break; }
-			case 'I': { uint32_t x = va_arg(ap, uint32_t); memcpy(p, &x, 4); p += 4; used += 4; break; }
-			case 'L': { uint32_t x = va_arg(ap, uint32_t); memcpy(p, &x, 4); p += 4; used += 4; break; }
-			case 'q': { int64_t x = va_arg(ap, int64_t); memcpy(p, &x, 8); p += 8; used += 8; break; }
-			case 'Q': { uint64_t x = va_arg(ap, uint64_t); memcpy(p, &x, 8); p += 8; used += 8; break; }
-			case 'f': { double v = va_arg(ap, double); float x = (float)v; memcpy(p, &x, 4); p += 4; used += 4; break; }
-			case 'd': { double x = va_arg(ap, double); memcpy(p, &x, 8); p += 8; used += 8; break; }
-			default: { (void)va_arg(ap, int); break; }
-		}
+	// Find or register message type
+	struct ap_message_type_s* mt = ap_find_or_register_message_type(ctx, name, format, labels);
+	if (!mt) {
+		return;
 	}
 
-	*payload_size = used;
+	// Write FMT message if not already registered
+	if (!mt->registered) {
+		ap_write_fmt_message(fileprefix, filesuffix, mt);
+		mt->registered = true;
+	}
+
+	// Encode the data message
+	uint8_t buffer[256]; // Should be large enough for most messages
+	buffer[0] = AP_HEAD_BYTE1;
+	buffer[1] = AP_HEAD_BYTE2;
+	buffer[2] = mt->id;
+
+	va_list args;
+	va_start(args, labels);
+	size_t data_size = ap_encode_message_data(buffer, sizeof(buffer), format, args);
+	va_end(args);
+
+	if (data_size == 0) {
+		return; // Encoding failed
+	}
+
+	// Write the data message
+	logger_write(fileprefix, filesuffix, buffer, data_size);
 }
 
-bool logger_generate_fmt_I(const char* fileprefix, const char* filesuffix, const char* name, const char* format, const char* labels) {
-	if (!name || !format || !labels) {
+bool logger_write_ap_I(const char* fileprefix, const char* filesuffix, const char* name, const char* format, const char* labels, ...) {
+	if (!fileprefix || !filesuffix || !name || !format || !labels) {
 		return false;
 	}
 
-	char name4[4] = {0,0,0,0};
-	strncpy(name4, name, 4);
+	chDbgCheckClassI();
 
-	// Generate FMT record payload
-	char fmt_hdr[3] = { 'F','M','T' };
-	size_t fmt_len = strlen(format) + 1;
-	size_t labels_len = strlen(labels) + 1;
-	size_t payload_len = sizeof(fmt_hdr) + sizeof(name4) + fmt_len + labels_len;
-
-	if (payload_len > LOGGER_FMT_MAX_PAYLOAD_SIZE) {
+	// Get or create file context (I-class)
+	struct ap_file_context_s* ctx = ap_get_or_create_file_context_I(fileprefix, filesuffix);
+	if (!ctx) {
 		return false;
 	}
 
-	uint8_t* payload = logger_fmt_payload_buffer;
-	uint8_t* p = payload;
-
-	memcpy(p, fmt_hdr, sizeof(fmt_hdr)); p += sizeof(fmt_hdr);
-	memcpy(p, name4, sizeof(name4)); p += sizeof(name4);
-	memcpy(p, format, fmt_len); p += fmt_len;
-	memcpy(p, labels, labels_len);
-
-	// Send FMT record over pubsub
-	struct logger_msg_s header;
-	memset(&header, 0, sizeof(header));
-	strncpy(header.prefix, fileprefix, LOGGER_MAX_PREFIX_LEN);
-	strncpy(header.suffix, filesuffix, LOGGER_MAX_SUFFIX_LEN);
-	header.payload_len = (uint32_t)payload_len;
-
-	struct {
-		const struct logger_msg_s* hdr;
-		const void* payload;
-	} pack_ctx = { &header, payload };
-
-	return pubsub_try_publish_message_I(&log_msg_topic, sizeof(struct logger_msg_s) + payload_len, logger_header_payload_writer, &pack_ctx);
-}
-
-bool logger_write_ap_I(const char* fileprefix, const char* filesuffix, const char* name, const char* format, ...) {
-	if (!fileprefix || !filesuffix || !name || !format) {
+	// Find or register message type (I-class)
+	struct ap_message_type_s* mt = ap_find_or_register_message_type_I(ctx, name, format, labels);
+	if (!mt) {
 		return false;
 	}
 
-	va_list ap;
-	va_start(ap, format);
-
-	size_t payload_size = LOGGER_AP_MAX_PAYLOAD_SIZE;
-	logger_pack_ap_payload(logger_ap_payload_buffer, &payload_size, name, format, ap);
-
-	va_end(ap);
-
-	if (payload_size == 0) {
-		return false;
+	// Write FMT message if not already registered (I-class path)
+	if (!mt->registered) {
+		ap_write_fmt_message_I(fileprefix, filesuffix, mt);
+		mt->registered = true;
 	}
 
-	struct logger_msg_s header;
-	memset(&header, 0, sizeof(header));
-	strncpy(header.prefix, fileprefix, LOGGER_MAX_PREFIX_LEN);
-	strncpy(header.suffix, filesuffix, LOGGER_MAX_SUFFIX_LEN);
-	header.payload_len = (uint32_t)payload_size;
+	// Encode the data message
+	uint8_t buffer[256]; // Should be large enough for most messages
+	buffer[0] = AP_HEAD_BYTE1;
+	buffer[1] = AP_HEAD_BYTE2;
+	buffer[2] = mt->id;
 
-	struct {
-		const struct logger_msg_s* hdr;
-		const void* payload;
-	} pack_ctx = { &header, logger_ap_payload_buffer };
+	va_list args;
+	va_start(args, labels);
+	size_t data_size = ap_encode_message_data(buffer, sizeof(buffer), format, args);
+	va_end(args);
 
-	return pubsub_try_publish_message_I(&log_msg_topic, sizeof(struct logger_msg_s) + payload_size, logger_header_payload_writer, &pack_ctx);
+	if (data_size == 0) {
+		return false; // Encoding failed
+	}
+
+	// Write the data message (I-class path)
+	return logger_write_I(fileprefix, filesuffix, buffer, data_size);
 }
