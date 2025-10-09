@@ -802,7 +802,7 @@
  */
 #ifndef CH_CFG_SYSTEM_HALT_HOOK
 #define CH_CFG_SYSTEM_HALT_HOOK(reason) {                                   \
-/* System halt code here.*/                                               \
+  fault_set_I("chibios_halt", FAULT_SEVERITY_CRITICAL, (reason) ? (reason) : ""); \
 }
 #endif
 
@@ -835,6 +835,31 @@
 #define CH_CFG_STACK_OVERFLOW_HOOK(tp) {                                              \
   fault_set_I("stack_overflow", FAULT_SEVERITY_CRITICAL, "");                                                 \
 }
+#endif
+
+/*
+ * Override ChibiOS debug macros so failed checks/asserts raise faults instead
+ * of halting. Uses _I variant to be safe in critical/ISR contexts.
+ */
+#ifndef chDbgCheck
+#define chDbgCheck(c) do {                                                  \
+  if (CH_DBG_ENABLE_CHECKS != FALSE) {                                      \
+    if (!(c)) {                                                             \
+      fault_set_I("rt_check", FAULT_SEVERITY_ERROR, __func__);            \
+    }                                                                       \
+  }                                                                         \
+} while (false)
+#endif
+
+#ifndef chDbgAssert
+#define chDbgAssert(c, r) do {                                              \
+  if (CH_DBG_ENABLE_ASSERTS != FALSE) {                                     \
+    if (!(c)) {                                                             \
+      (void)(r);                                                            \
+      fault_set_I("rt_assert", FAULT_SEVERITY_CRITICAL, __func__);        \
+    }                                                                       \
+  }                                                                         \
+} while (false)
 #endif
 #endif
 
