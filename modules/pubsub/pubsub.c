@@ -88,14 +88,16 @@ void pubsub_copy_writer_func(size_t msg_size, void* msg, void* ctx) {
 }
 
 bool pubsub_try_publish_message_I(struct pubsub_topic_s* topic, size_t size, pubsub_message_writer_func_ptr writer_cb, void* ctx) {
-    if (!topic || !topic->group || !topic->listener_list_head) {
+    if (!topic || !topic->group) {
+        return false;
+    }
+    chDbgCheckClassI();
+    if (!topic->listener_list_head) {
         return false;
     }
 
-    chSysLockFromISR();
     struct pubsub_message_s* message = fifoallocator_allocate(&topic->group->allocator, size+sizeof(struct pubsub_message_s));
     if (!message) {
-        chSysUnlockFromISR();
         return false;
     }
 
@@ -122,7 +124,6 @@ bool pubsub_try_publish_message_I(struct pubsub_topic_s* topic, size_t size, pub
         listener = listener->next;
     }
 
-    chSysUnlockFromISR();
     return true;
 }
 
@@ -145,6 +146,22 @@ static void pubsub_delete_message_S(struct pubsub_message_s* message_to_delete) 
         }
         listener = listener->next;
     }
+}
+
+static bool try_delete_message_S(struct pubsub_message_s* message_to_delete) {
+    struct pubsub_listener_s* listener = message_to_delete->topic->listener_list_head;
+
+    // Check if any listener pointing to this message is waiting
+    while (listener) {
+        if (listener->next_message == message_to_delete && listener->waiting_thread_reference_ptr) {
+            return false; // Cannot delete - listener is waiting on this message
+        }
+        listener = listener->next;
+    }
+
+    // No listeners are waiting, safe to delete
+    pubsub_delete_message_S(message_to_delete);
+    return true;
 }
 
 void pubsub_publish_message(struct pubsub_topic_s* topic, size_t size, pubsub_message_writer_func_ptr writer_cb, void* ctx) {
@@ -247,6 +264,16 @@ bool pubsub_multiple_listener_handle_one_timeout(size_t num_listeners, struct pu
         }
 
         chMtxUnlock(&listener_with_message->mtx);
+
+        // Try to delete the processed message if it's the oldest
+        chSysLock();
+        if (fifoallocator_peek_oldest(&message->topic->group->allocator) == message) {
+            if (try_delete_message_S(message)) {
+                fifoallocator_pop_oldest(&message->topic->group->allocator);
+            }
+        }
+        chSysUnlock();
+
         return true;
     } else {
         chSysUnlock();
