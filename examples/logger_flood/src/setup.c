@@ -20,14 +20,9 @@ static void gpt_cb(GPTDriver *gptp) {
 	(void)gptp;
 	uint32_t v = chSysGetRealtimeCounterX();
 
-	// Generate FMT record on first call (ISR-safe)
-	static bool fmt_generated = false;
-	if (!fmt_generated) {
-		logger_generate_fmt_I("FLOOD", "BIN", "TICK", "I", "tick");
-		fmt_generated = true;
-	}
-
-    logger_write_ap_I("FLOOD", "BIN", "TICK", "I", v);
+    chSysLockFromISR();
+    logger_write_ap_I("FLOOD", "BIN", "TICK", "I", "tick", v);
+    chSysUnlockFromISR();
 }
 
 RUN_AFTER(CH_SYS_INIT) {
