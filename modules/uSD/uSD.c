@@ -115,9 +115,7 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
     sdcStart(&SDCD1, NULL);
     usd_dump_regs(&SDCD1, "after sdcStart");
     if (sdcConnect(&SDCD1) != HAL_SUCCESS) {
-        sdcflags_t errs = sdcGetAndClearErrors(&SDCD1);
         usd_dump_regs(&SDCD1, "after sdcConnect FAIL");
-        usd_debug_logf("errors=0x%08lX", (unsigned long)errs);
         fault_set("uSDfault", USD_FAULT_SEVERITY, "connect fail");
         sdcStop(&SDCD1);
         worker_thread_timer_task_reschedule(&WT, &usd_init_task, chTimeMS2I(500));
