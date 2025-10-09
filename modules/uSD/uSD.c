@@ -82,14 +82,13 @@ RUN_AFTER(INIT_END) {
     if (!sdc_lld_is_card_inserted(&SDCD1)) {
         fault_set("uSDfault", USD_FAULT_SEVERITY, "no card");
     }
-    /* Periodic 100ms task to (re)try SD initialization. */
-    worker_thread_add_timer_task(&WT, &usd_init_task, usd_init_task_func, NULL, chTimeMS2I(100), true);
+    /* Start a one-shot task; it will reschedule itself as needed until mounted. */
+    worker_thread_add_timer_task(&WT, &usd_init_task, usd_init_task_func, NULL, chTimeMS2I(100), false);
 }
 
 static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
     (void)task;
     static bool init_in_progress;
-    static systime_t next_attempt = 0;
 
     if (filesystem_ok) {
         /* Stop scheduling once mounted. */
@@ -97,11 +96,9 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
         return;
     }
 
-    systime_t now = osalOsGetSystemTimeX();
     if (init_in_progress) {
-        return;
-    }
-    if (!osalTimeIsInRangeX(now, next_attempt, osalTimeAddX(next_attempt, TIME_IMMEDIATE))) {
+        /* Try again later. */
+        worker_thread_timer_task_reschedule(&WT, &usd_init_task, chTimeMS2I(500));
         return;
     }
 
@@ -110,7 +107,7 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
     /* If no card is inserted, set fault and back off without touching the driver. */
     if (!sdc_lld_is_card_inserted(&SDCD1)) {
         fault_set("uSDfault", USD_FAULT_SEVERITY, "no card");
-        next_attempt = osalTimeAddX(now, OSAL_MS2I(500));
+        worker_thread_timer_task_reschedule(&WT, &usd_init_task, chTimeMS2I(500));
         init_in_progress = false;
         return;
     }
@@ -123,7 +120,7 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
         usd_debug_logf("errors=0x%08lX", (unsigned long)errs);
         fault_set("uSDfault", USD_FAULT_SEVERITY, "connect fail");
         sdcStop(&SDCD1);
-        next_attempt = osalTimeAddX(now, OSAL_MS2I(500));
+        worker_thread_timer_task_reschedule(&WT, &usd_init_task, chTimeMS2I(500));
         init_in_progress = false;
         return;
     }
@@ -145,7 +142,7 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
             fault_set("uSDfault", USD_FAULT_SEVERITY, "mount fail");
             sdcDisconnect(&SDCD1);
             sdcStop(&SDCD1);
-            next_attempt = osalTimeAddX(now, OSAL_MS2I(500));
+            worker_thread_timer_task_reschedule(&WT, &usd_init_task, chTimeMS2I(500));
             init_in_progress = false;
             return;
         }
@@ -154,7 +151,7 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
             fault_set("uSDfault", USD_FAULT_SEVERITY, "mount fail");
             sdcDisconnect(&SDCD1);
             sdcStop(&SDCD1);
-            next_attempt = osalTimeAddX(now, OSAL_MS2I(500));
+            worker_thread_timer_task_reschedule(&WT, &usd_init_task, chTimeMS2I(500));
             init_in_progress = false;
             return;
         }
@@ -163,7 +160,7 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
         fault_set("uSDfault", USD_FAULT_SEVERITY, "mount fail");
         sdcDisconnect(&SDCD1);
         sdcStop(&SDCD1);
-        next_attempt = osalTimeAddX(now, OSAL_MS2I(500));
+        worker_thread_timer_task_reschedule(&WT, &usd_init_task, chTimeMS2I(500));
         init_in_progress = false;
         return;
 #endif
@@ -186,8 +183,7 @@ static void usd_init_task_func(struct worker_thread_timer_task_s* task) {
     } else {
         usd_debug_logf("mounted");
     }
-    /* Stop periodic attempts after success. */
-    worker_thread_remove_timer_task(&WT, &usd_init_task);
+    /* Success: do not reschedule. */
     init_in_progress = false;
 }
 
