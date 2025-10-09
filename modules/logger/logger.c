@@ -90,6 +90,7 @@ struct ap_message_type_s {
     uint8_t id;
     uint8_t message_size;
     bool registered;
+    uint32_t fmt_written_index; // file index for which FMT has been written
 };
 
 struct ap_file_context_s {
@@ -97,6 +98,7 @@ struct ap_file_context_s {
     char suffix[LOGGER_MAX_SUFFIX_LEN + 1];
     struct ap_message_type_s message_types[AP_MAX_MESSAGE_TYPES];
     uint8_t next_message_id;
+    uint32_t fmt_written_index; // last file index for which FMT headers were written
     struct ap_file_context_s* next;
 };
 
@@ -107,6 +109,52 @@ static struct ap_file_context_s* ap_file_context_list_head;
 static struct pubsub_topic_s log_msg_topic;
 static struct worker_thread_listener_task_s log_msg_listener_task;
 static void log_msg_handler(size_t msg_size, const void* buf, void* ctx);
+static struct worker_thread_timer_task_s logger_sync_task;
+static void logger_sync_task_func(struct worker_thread_timer_task_s* task);
+// Forward declaration used by logger_ensure_fmt_for_file
+static struct ap_file_context_s* ap_get_or_create_file_context(const char* prefix, const char* suffix);
+
+// Ensure FMT records are present for the current open file. Writes FMT directly.
+static void logger_ensure_fmt_for_file(const char* prefix, const char* suffix, struct open_file_s* of) {
+	struct ap_file_context_s* actx = ap_get_or_create_file_context(prefix, suffix);
+	if (!actx) {
+		return;
+	}
+	for (size_t i = 0; i < AP_MAX_MESSAGE_TYPES; i++) {
+		if (actx->message_types[i].id == 0) {
+			continue; // unused slot
+		}
+		if (actx->message_types[i].fmt_written_index == of->index) {
+			continue; // already written for this file index
+		}
+		// Build FMT record (89 bytes)
+		uint8_t fmt_data[89];
+		size_t offset = 0;
+		fmt_data[offset++] = AP_HEAD_BYTE1;
+		fmt_data[offset++] = AP_HEAD_BYTE2;
+		fmt_data[offset++] = AP_FMT_MSG_ID;
+		fmt_data[offset++] = actx->message_types[i].id; // type id
+		fmt_data[offset++] = actx->message_types[i].message_size; // length
+		for (size_t j = 0; j < AP_MAX_NAME_LEN; j++) {
+			fmt_data[offset++] = (j < strlen(actx->message_types[i].name)) ? (uint8_t)actx->message_types[i].name[j] : 0;
+		}
+		for (size_t j = 0; j < AP_MAX_FORMAT_LEN; j++) {
+			fmt_data[offset++] = (j < strlen(actx->message_types[i].format)) ? (uint8_t)actx->message_types[i].format[j] : 0;
+		}
+		for (size_t j = 0; j < AP_MAX_LABELS_LEN; j++) {
+			fmt_data[offset++] = (j < strlen(actx->message_types[i].labels)) ? (uint8_t)actx->message_types[i].labels[j] : 0;
+		}
+		UINT bw = 0;
+		FRESULT wr = f_write(&of->fp, fmt_data, sizeof(fmt_data), &bw);
+		if (wr != FR_OK || bw != sizeof(fmt_data)) {
+			LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "fmt write err %u bw=%u", (unsigned)wr, (unsigned)bw);
+		} else {
+			of->bytes_written += sizeof(fmt_data);
+			actx->message_types[i].fmt_written_index = of->index;
+			actx->message_types[i].registered = true;
+		}
+	}
+}
 
 // ArduPilot logging helper functions
 static uint8_t ap_calculate_message_size(const char* format) {
@@ -159,6 +207,7 @@ static struct ap_file_context_s* ap_get_or_create_file_context_I(const char* pre
     strncpy(ctx->prefix, prefix, LOGGER_MAX_PREFIX_LEN);
     strncpy(ctx->suffix, suffix, LOGGER_MAX_SUFFIX_LEN);
     ctx->next_message_id = 1; // Reserve 0 for special cases
+    ctx->fmt_written_index = 0;
 
     LINKED_LIST_APPEND(struct ap_file_context_s, ap_file_context_list_head, ctx);
     return ctx;
@@ -216,77 +265,10 @@ static struct ap_message_type_s* ap_find_or_register_message_type(struct ap_file
     return mt;
 }
 
-// Write FMT message for a message type
-static void ap_write_fmt_message(const char* fileprefix, const char* filesuffix, struct ap_message_type_s* mt) {
-    // FMT message structure: 3 header + 1 type + 1 length + 4 name + 16 format + 64 labels = 89 bytes
-    uint8_t fmt_data[89];
-    size_t offset = 0;
+    // Write FMT message for a message type
+// Removed: ap_write_fmt_message; FMT emission is handled in logger thread
 
-    // Write header
-    fmt_data[offset++] = AP_HEAD_BYTE1;
-    fmt_data[offset++] = AP_HEAD_BYTE2;
-    fmt_data[offset++] = AP_FMT_MSG_ID;
-
-    // Write type
-    fmt_data[offset++] = mt->id;
-
-    // Write length
-    fmt_data[offset++] = mt->message_size;
-
-    // Write name (4 chars, null-padded)
-    for (size_t i = 0; i < AP_MAX_NAME_LEN; i++) {
-        fmt_data[offset++] = (i < strlen(mt->name)) ? (uint8_t)mt->name[i] : 0;
-    }
-
-    // Write format (16 chars, null-padded)
-    for (size_t i = 0; i < AP_MAX_FORMAT_LEN; i++) {
-        fmt_data[offset++] = (i < strlen(mt->format)) ? (uint8_t)mt->format[i] : 0;
-    }
-
-    // Write labels (64 chars, null-padded)
-    for (size_t i = 0; i < AP_MAX_LABELS_LEN; i++) {
-        fmt_data[offset++] = (i < strlen(mt->labels)) ? (uint8_t)mt->labels[i] : 0;
-    }
-
-    // Write the FMT message
-    logger_write(fileprefix, filesuffix, fmt_data, sizeof(fmt_data));
-}
-
-static void ap_write_fmt_message_I(const char* fileprefix, const char* filesuffix, struct ap_message_type_s* mt) {
-    chDbgCheckClassI();
-    // FMT message structure: 3 header + 1 type + 1 length + 4 name + 16 format + 64 labels = 89 bytes
-    uint8_t fmt_data[89];
-    size_t offset = 0;
-
-    // Write header
-    fmt_data[offset++] = AP_HEAD_BYTE1;
-    fmt_data[offset++] = AP_HEAD_BYTE2;
-    fmt_data[offset++] = AP_FMT_MSG_ID;
-
-    // Write type
-    fmt_data[offset++] = mt->id;
-
-    // Write length
-    fmt_data[offset++] = mt->message_size;
-
-    // Write name (4 chars, null-padded)
-    for (size_t i = 0; i < AP_MAX_NAME_LEN; i++) {
-        fmt_data[offset++] = (i < strlen(mt->name)) ? (uint8_t)mt->name[i] : 0;
-    }
-
-    // Write format (16 chars, null-padded)
-    for (size_t i = 0; i < AP_MAX_FORMAT_LEN; i++) {
-        fmt_data[offset++] = (i < strlen(mt->format)) ? (uint8_t)mt->format[i] : 0;
-    }
-
-    // Write labels (64 chars, null-padded)
-    for (size_t i = 0; i < AP_MAX_LABELS_LEN; i++) {
-        fmt_data[offset++] = (i < strlen(mt->labels)) ? (uint8_t)mt->labels[i] : 0;
-    }
-
-    // Write the FMT message using the I-class path
-    logger_write_I(fileprefix, filesuffix, fmt_data, sizeof(fmt_data));
-}
+// Removed: ap_write_fmt_message_I; FMT emission is handled in logger thread
 
 // Encode data according to format string into binary buffer
 static size_t ap_encode_message_data(uint8_t* buffer, size_t buffer_size, const char* format, va_list args) {
@@ -441,7 +423,10 @@ static bool logger_ensure_base_dir(void) {
 	}
 	(void)fs;
 	FRESULT res = f_mkdir(LOGGER_BASE_DIR);
-	(void)res;
+	if (res != FR_OK && res != FR_EXIST) {
+		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "mkdir %s -> %u", LOGGER_BASE_DIR, (unsigned)res);
+		return false;
+	}
 	return true;
 }
 
@@ -561,14 +546,17 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 		f->index = logger_find_next_index(prefix, suffix);
 		char path[64];
 		logger_build_path(path, sizeof(path), prefix, f->index, suffix);
-		if (f_open(&f->fp, path, FA_CREATE_ALWAYS | FA_WRITE | FA_OPEN_APPEND) != FR_OK) {
+		FRESULT open_res = f_open(&f->fp, path, FA_CREATE_ALWAYS | FA_WRITE | FA_OPEN_APPEND);
+		if (open_res != FR_OK) {
 			chSysLock();
 			chPoolFreeI(&logger_open_file_pool, f);
 			chSysUnlock();
+			LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "open %s -> %u", path, (unsigned)open_res);
 			return NULL;
 		}
 		f->bytes_written = f->fp.fptr;
 		LINKED_LIST_APPEND(struct open_file_s, open_file_list_head, f);
+		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "opened %s", path);
 	}
 
 	uint64_t needed = (uint64_t)upcoming_write_len;
@@ -577,6 +565,7 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 		f->index++;
 		char path[64];
 		logger_build_path(path, sizeof(path), prefix, f->index, suffix);
+		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "rotate %s_%u.%s", prefix, (unsigned)f->index, suffix);
 		while (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
 			if (!logger_delete_oldest_for_prefix(prefix, suffix)) {
 				break;
@@ -586,9 +575,13 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 		f->bytes_written = f->fp.fptr;
 	}
 
-	while (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
-		if (!logger_delete_oldest_for_prefix(prefix, suffix)) {
-			break;
+	if (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
+		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "low space: need %lu", (unsigned long)(LOGGER_MIN_FREE_BYTES + needed));
+		while (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
+			if (!logger_delete_oldest_for_prefix(prefix, suffix)) {
+				LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "no deletable files");
+				break;
+			}
 		}
 	}
 
@@ -620,9 +613,19 @@ static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 		return;
 	}
 
+	// Ensure FMT headers exist for this file index before appending any data
+	logger_ensure_fmt_for_file(msg->prefix, msg->suffix, of);
+
 	UINT bw;
-	f_write(&of->fp, msg->payload, msg->payload_len, &bw);
+	FRESULT wr = f_write(&of->fp, msg->payload, msg->payload_len, &bw);
+	// if (wr != FR_OK || bw != msg->payload_len) {
+	// 	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "write err %u bw=%u len=%u", (unsigned)wr, (unsigned)bw, (unsigned)msg->payload_len);
+	// } else {
+	// 	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "write %s_%u.%s %uB", of->prefix, (unsigned)of->index, of->suffix, (unsigned)bw);
+	// }
 	of->bytes_written += msg->payload_len;
+	/* Ensure directory entry (file size) is updated on media. */
+	// f_sync(&of->fp);
 }
 
 RUN_ON(PUBSUB_TOPIC_INIT) {
@@ -632,6 +635,8 @@ RUN_ON(PUBSUB_TOPIC_INIT) {
 	pubsub_init_topic(&log_msg_topic, NULL);
 #endif
 	worker_thread_add_listener_task(&WT, &log_msg_listener_task, &log_msg_topic, log_msg_handler, NULL);
+	/* Periodically flush directory entries so file sizes are updated. */
+	worker_thread_add_timer_task(&WT, &logger_sync_task, logger_sync_task_func, NULL, chTimeMS2I(500), true);
 	logger_ensure_base_dir();
 	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "ready");
 }
@@ -664,6 +669,15 @@ void logger_write(const char* fileprefix, const char* filesuffix, const void* da
 	pubsub_publish_message(&log_msg_topic, sizeof(struct logger_msg_s) + data_len, logger_header_payload_writer, &pack_ctx);
 }
 
+static void logger_sync_task_func(struct worker_thread_timer_task_s* task) {
+	(void)task;
+	struct open_file_s* f = open_file_list_head;
+	while (f) {
+		f_sync(&f->fp);
+		f = f->next;
+	}
+}
+
 bool logger_write_I(const char* fileprefix, const char* filesuffix, const void* data, size_t data_len) {
 	if (!fileprefix || !filesuffix || !data || data_len == 0) {
 		return false;
@@ -688,23 +702,19 @@ void logger_write_ap(const char* fileprefix, const char* filesuffix, const char*
 		return;
 	}
 
-	// Get or create file context
-	struct ap_file_context_s* ctx = ap_get_or_create_file_context(fileprefix, filesuffix);
+    // Get or create file context
+    struct ap_file_context_s* ctx = ap_get_or_create_file_context(fileprefix, filesuffix);
 	if (!ctx) {
 		return;
 	}
 
-	// Find or register message type
-	struct ap_message_type_s* mt = ap_find_or_register_message_type(ctx, name, format, labels);
-	if (!mt) {
-		return;
-	}
+    // Defer FMT emission to thread context; non-ISR publish only packages the data
 
-	// Write FMT message if not already registered
-	if (!mt->registered) {
-		ap_write_fmt_message(fileprefix, filesuffix, mt);
-		mt->registered = true;
-	}
+    // Find or register message type (thread context). Do NOT write FMT here; only update the table.
+    struct ap_message_type_s* mt = ap_find_or_register_message_type(ctx, name, format, labels);
+    if (!mt) {
+        return;
+    }
 
 	// Encode the data message
 	uint8_t buffer[256]; // Should be large enough for most messages
@@ -732,23 +742,19 @@ bool logger_write_ap_I(const char* fileprefix, const char* filesuffix, const cha
 
 	chDbgCheckClassI();
 
-	// Get or create file context (I-class)
-	struct ap_file_context_s* ctx = ap_get_or_create_file_context_I(fileprefix, filesuffix);
+    // Get or create file context (I-class)
+    struct ap_file_context_s* ctx = ap_get_or_create_file_context_I(fileprefix, filesuffix);
 	if (!ctx) {
 		return false;
 	}
 
-	// Find or register message type (I-class)
-	struct ap_message_type_s* mt = ap_find_or_register_message_type_I(ctx, name, format, labels);
-	if (!mt) {
-		return false;
-	}
+    // Defer FMT emission to thread context; ISR publish only packages the data
 
-	// Write FMT message if not already registered (I-class path)
-	if (!mt->registered) {
-		ap_write_fmt_message_I(fileprefix, filesuffix, mt);
-		mt->registered = true;
-	}
+    // Find or register message type (I-class). Do NOT write FMT here; only update the table.
+    struct ap_message_type_s* mt = ap_find_or_register_message_type_I(ctx, name, format, labels);
+    if (!mt) {
+        return false;
+    }
 
 	// Encode the data message
 	uint8_t buffer[256]; // Should be large enough for most messages
