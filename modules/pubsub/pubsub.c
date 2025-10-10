@@ -98,6 +98,7 @@ bool pubsub_try_publish_message_I(struct pubsub_topic_s* topic, size_t size, pub
 
     struct pubsub_message_s* message = fifoallocator_allocate(&topic->group->allocator, size+sizeof(struct pubsub_message_s));
     if (!message) {
+        pubsub_cumulative_misses++;
         return false;
     }
 
