@@ -76,6 +76,9 @@ struct open_file_s {
 	FIL fp;
 	uint32_t index;
 	uint64_t bytes_written;
+	/* Buffered write: accumulate data; flush only in 512-byte aligned multiples */
+	uint8_t writebuf[16384];
+	uint16_t writebuf_len;
 	struct open_file_s* next;
 };
 
@@ -111,8 +114,76 @@ static struct worker_thread_listener_task_s log_msg_listener_task;
 static void log_msg_handler(size_t msg_size, const void* buf, void* ctx);
 static struct worker_thread_timer_task_s logger_sync_task;
 static void logger_sync_task_func(struct worker_thread_timer_task_s* task);
+static struct worker_thread_timer_task_s logger_idle_sync_task; // one-shot idle flush
+
+/* Bytes-written statistics */
+static uint64_t logger_bytes_written_total;
+static struct worker_thread_timer_task_s logger_stats_task;
+static void logger_stats_task_func(struct worker_thread_timer_task_s* task);
 // Forward declaration used by logger_ensure_fmt_for_file
 static struct ap_file_context_s* ap_get_or_create_file_context(const char* prefix, const char* suffix);
+
+/* SD sector size (bytes). All physical writes must be multiples of this. */
+#ifndef LOGGER_SECTOR_SIZE
+#define LOGGER_SECTOR_SIZE 512u
+#endif
+
+/* Flush as many full sectors from write buffer as possible, keeping any tail (<512 bytes) buffered. */
+static void logger_writebuf_flush_aligned(struct open_file_s* of, bool do_sync) {
+	if (!of) {
+		return;
+	}
+	uint32_t to_write = (uint32_t)of->writebuf_len & ~(LOGGER_SECTOR_SIZE - 1u);
+	if (to_write == 0) {
+		return;
+	}
+	uint32_t off = 0;
+	while (off < to_write) {
+		UINT bw = 0;
+		UINT chunk = (UINT)(to_write - off);
+		FRESULT wr = f_write(&of->fp, &of->writebuf[off], chunk, &bw);
+		if (wr != FR_OK || bw == 0) {
+			break;
+		}
+		off += bw;
+		of->bytes_written += bw;
+		logger_bytes_written_total += bw;
+	}
+	/* shift any remaining buffered tail to the start */
+	if (off > 0) {
+		uint32_t remain = (uint32_t)of->writebuf_len - off;
+		if (remain > 0) {
+			memmove(of->writebuf, &of->writebuf[off], remain);
+		}
+		of->writebuf_len = (uint16_t)remain;
+		if (do_sync) {
+			f_sync(&of->fp);
+		}
+	}
+}
+
+/* Append data to write buffer, flushing in aligned multiples if buffer is full. */
+static void logger_writebuf_append(struct open_file_s* of, const uint8_t* data, uint32_t len) {
+	if (!of || !data || len == 0) {
+		return;
+	}
+	while (len > 0) {
+		if (of->writebuf_len == sizeof(of->writebuf)) {
+			/* attempt to flush a full buffer (which is sector-multiple sized) */
+			logger_writebuf_flush_aligned(of, true);
+			/* if still full, give up this cycle */
+			if (of->writebuf_len == sizeof(of->writebuf)) {
+				break;
+			}
+		}
+		uint32_t space = (uint32_t)sizeof(of->writebuf) - of->writebuf_len;
+		uint32_t to_copy = (len < space) ? len : space;
+		memcpy(&of->writebuf[of->writebuf_len], data, to_copy);
+		of->writebuf_len += (uint16_t)to_copy;
+		data += to_copy;
+		len -= to_copy;
+	}
+}
 
 // Ensure FMT records are present for the current open file. Writes FMT directly.
 static void logger_ensure_fmt_for_file(const char* prefix, const char* suffix, struct open_file_s* of) {
@@ -144,15 +215,10 @@ static void logger_ensure_fmt_for_file(const char* prefix, const char* suffix, s
 		for (size_t j = 0; j < AP_MAX_LABELS_LEN; j++) {
 			fmt_data[offset++] = (j < strlen(actx->message_types[i].labels)) ? (uint8_t)actx->message_types[i].labels[j] : 0;
 		}
-		UINT bw = 0;
-		FRESULT wr = f_write(&of->fp, fmt_data, sizeof(fmt_data), &bw);
-		if (wr != FR_OK || bw != sizeof(fmt_data)) {
-			LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "fmt write err %u bw=%u", (unsigned)wr, (unsigned)bw);
-		} else {
-			of->bytes_written += sizeof(fmt_data);
-			actx->message_types[i].fmt_written_index = of->index;
-			actx->message_types[i].registered = true;
-		}
+		/* Queue FMT record into write buffer to preserve 512-byte file alignment */
+		logger_writebuf_append(of, fmt_data, (uint32_t)sizeof(fmt_data));
+		actx->message_types[i].fmt_written_index = of->index;
+		actx->message_types[i].registered = true;
 	}
 }
 
@@ -555,24 +621,31 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 			return NULL;
 		}
 		f->bytes_written = f->fp.fptr;
+		f->writebuf_len = 0;
 		LINKED_LIST_APPEND(struct open_file_s, open_file_list_head, f);
 		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "opened %s", path);
 	}
 
 	uint64_t needed = (uint64_t)upcoming_write_len;
 	if (f->bytes_written + needed > (uint64_t)LOGGER_ROTATE_BYTES) {
-		f_close(&f->fp);
-		f->index++;
-		char path[64];
-		logger_build_path(path, sizeof(path), prefix, f->index, suffix);
-		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "rotate %s_%u.%s", prefix, (unsigned)f->index, suffix);
-		while (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
-			if (!logger_delete_oldest_for_prefix(prefix, suffix)) {
-				break;
+		/* Flush aligned multiples; postpone rotation if a partial sector remains */
+		logger_writebuf_flush_aligned(f, true);
+		if ((f->writebuf_len & (LOGGER_SECTOR_SIZE - 1u)) == 0u && f->writebuf_len == 0u) {
+			f_close(&f->fp);
+			f->index++;
+			char path[64];
+			logger_build_path(path, sizeof(path), prefix, f->index, suffix);
+			LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "rotate %s_%u.%s", prefix, (unsigned)f->index, suffix);
+			while (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
+				if (!logger_delete_oldest_for_prefix(prefix, suffix)) {
+					break;
+				}
 			}
+			f_open(&f->fp, path, FA_CREATE_ALWAYS | FA_WRITE | FA_OPEN_APPEND);
+			f->bytes_written = f->fp.fptr;
+		} else {
+			/* Can't rotate cleanly yet; continue writing to current file until next sector boundary */
 		}
-		f_open(&f->fp, path, FA_CREATE_ALWAYS | FA_WRITE | FA_OPEN_APPEND);
-		f->bytes_written = f->fp.fptr;
 	}
 
 	if (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
@@ -588,11 +661,6 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 	return f;
 }
 
-
-
-
-
-
 static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 	UNUSED(ctx);
 	if (msg_size < sizeof(struct logger_msg_s)) {
@@ -601,7 +669,9 @@ static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 	}
 	const struct logger_msg_s* msg = buf;
 
-	// Write the raw data to file
+	// LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "log msg recv sz=%u payload=%u", (unsigned)msg_size, (unsigned)msg->payload_len);
+
+    // Write the raw data to file
 	if (!logger_ensure_base_dir()) {
 		// LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "no fs");
 		return;
@@ -612,20 +682,22 @@ static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "open fail %s.%s", msg->prefix, msg->suffix);
 		return;
 	}
+	// LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "open ok %s_%u.%s bytes=%lu wb=%u", of->prefix, (unsigned)of->index, of->suffix, (unsigned long)of->bytes_written, (unsigned)of->writebuf_len);
 
 	// Ensure FMT headers exist for this file index before appending any data
 	logger_ensure_fmt_for_file(msg->prefix, msg->suffix, of);
 
-	UINT bw;
-	FRESULT wr = f_write(&of->fp, msg->payload, msg->payload_len, &bw);
+	/* Append message payload to write buffer (aligned flushes handled internally) */
+	logger_writebuf_append(of, (const uint8_t*)msg->payload, (uint32_t)msg->payload_len);
+
+	/* schedule an idle-time flush for 500ms after the last write */
+	worker_thread_timer_task_reschedule(&WT, &logger_idle_sync_task, chTimeMS2I(500));
+	// LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "idle flush scheduled wb=%u", (unsigned)of->writebuf_len);
 	// if (wr != FR_OK || bw != msg->payload_len) {
 	// 	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "write err %u bw=%u len=%u", (unsigned)wr, (unsigned)bw, (unsigned)msg->payload_len);
 	// } else {
 	// 	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "write %s_%u.%s %uB", of->prefix, (unsigned)of->index, of->suffix, (unsigned)bw);
 	// }
-	of->bytes_written += msg->payload_len;
-	/* Ensure directory entry (file size) is updated on media. */
-	// f_sync(&of->fp);
 }
 
 RUN_ON(PUBSUB_TOPIC_INIT) {
@@ -635,8 +707,10 @@ RUN_ON(PUBSUB_TOPIC_INIT) {
 	pubsub_init_topic(&log_msg_topic, NULL);
 #endif
 	worker_thread_add_listener_task(&WT, &log_msg_listener_task, &log_msg_topic, log_msg_handler, NULL);
-	/* Periodically flush directory entries so file sizes are updated. */
-	worker_thread_add_timer_task(&WT, &logger_sync_task, logger_sync_task_func, NULL, chTimeMS2I(500), true);
+	/* One-shot idle flush task; initially disabled (TIME_INFINITE). */
+	worker_thread_add_timer_task(&WT, &logger_idle_sync_task, logger_sync_task_func, NULL, TIME_INFINITE, false);
+	/* Periodic stats printer (every 1s) */
+	worker_thread_add_timer_task(&WT, &logger_stats_task, logger_stats_task_func, NULL, chTimeS2I(1), true);
 	logger_ensure_base_dir();
 	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "ready");
 }
@@ -673,9 +747,25 @@ static void logger_sync_task_func(struct worker_thread_timer_task_s* task) {
 	(void)task;
 	struct open_file_s* f = open_file_list_head;
 	while (f) {
+		/* Flush only full 512-byte multiples; keep any tail buffered */
+		uint16_t before = f->writebuf_len;
+		logger_writebuf_flush_aligned(f, true);
+		uint16_t after = f->writebuf_len;
+		UNUSED(before);
+		UNUSED(after);
 		f_sync(&f->fp);
 		f = f->next;
 	}
+}
+
+static void logger_stats_task_func(struct worker_thread_timer_task_s* task) {
+	(void)task;
+	static uint64_t prev_total;
+	uint64_t cur = logger_bytes_written_total;
+	uint64_t delta = cur - prev_total;
+	prev_total = cur;
+	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "stats bytes_total=%lu KiB rate=%lu KiB/s",
+		(unsigned long)(cur/1024ULL), (unsigned long)(delta/1024ULL));
 }
 
 bool logger_write_I(const char* fileprefix, const char* filesuffix, const void* data, size_t data_len) {
