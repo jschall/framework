@@ -3,7 +3,7 @@ ifeq ($(USE_OPT),)
   USE_OPT = -Os
 endif
 
-override USE_OPT += -Wl,--wrap=logf -Wl,--wrap=log10f -Wl,--wrap=_impure_ptr -ggdb -std=gnu99 --specs=nosys.specs --specs=nano.specs -Werror=double-promotion -ffast-math
+override USE_OPT += -Wl,--wrap=logf -Wl,--wrap=log10f -Wl,--wrap=atan2f -Wl,--wrap=powf -Wl,--wrap=_impure_ptr -ggdb -std=gnu99 --specs=nosys.specs --specs=nano.specs -Werror=double-promotion -ffast-math
 
 # C specific options here (added to USE_OPT).
 ifeq ($(USE_COPT),)
