@@ -18,6 +18,21 @@
 #define LOGGER_DEBUG(level, fmt, ...)
 #endif
 
+/* Rate-limited debug logging to avoid flooding under fault conditions (e.g., no SD card). */
+#ifdef MODULE_UAVCAN_DEBUG_ENABLED
+#define __LOG_CONCAT_IMPL(a, b) a##b
+#define __LOG_CONCAT(a, b) __LOG_CONCAT_IMPL(a, b)
+#define LOGGER_DEBUG_RL(level, interval_ms, fmt, ...) do { \
+	static systime_t __LOG_CONCAT(_last_log_ts_, __LINE__) = 0; \
+	if (chVTTimeElapsedSinceX(__LOG_CONCAT(_last_log_ts_, __LINE__)) >= chTimeMS2I(interval_ms)) { \
+		__LOG_CONCAT(_last_log_ts_, __LINE__) = chVTGetSystemTimeX(); \
+		LOGGER_DEBUG(level, fmt, ##__VA_ARGS__); \
+	} \
+} while (0)
+#else
+#define LOGGER_DEBUG_RL(level, interval_ms, fmt, ...) do { (void)0; } while (0)
+#endif
+
 #ifndef LOGGER_WORKER_THREAD
 #error Please define LOGGER_WORKER_THREAD in framework_conf.h.
 #endif
@@ -490,7 +505,7 @@ static bool logger_ensure_base_dir(void) {
 	(void)fs;
 	FRESULT res = f_mkdir(LOGGER_BASE_DIR);
 	if (res != FR_OK && res != FR_EXIST) {
-		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "mkdir %s -> %u", LOGGER_BASE_DIR, (unsigned)res);
+		LOGGER_DEBUG_RL(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, 1000, "mkdir %s -> %u", LOGGER_BASE_DIR, (unsigned)res);
 		return false;
 	}
 	return true;
@@ -617,7 +632,7 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 			chSysLock();
 			chPoolFreeI(&logger_open_file_pool, f);
 			chSysUnlock();
-			LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "open %s -> %u", path, (unsigned)open_res);
+			LOGGER_DEBUG_RL(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, 1000, "open %s -> %u", path, (unsigned)open_res);
 			return NULL;
 		}
 		f->bytes_written = f->fp.fptr;
@@ -649,10 +664,10 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 	}
 
 	if (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
-		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "low space: need %lu", (unsigned long)(LOGGER_MIN_FREE_BYTES + needed));
+		LOGGER_DEBUG_RL(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, 5000, "low space: need %lu", (unsigned long)(LOGGER_MIN_FREE_BYTES + needed));
 		while (logger_get_free_bytes() < LOGGER_MIN_FREE_BYTES + needed) {
 			if (!logger_delete_oldest_for_prefix(prefix, suffix)) {
-				LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "no deletable files");
+				LOGGER_DEBUG_RL(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, 5000, "no deletable files");
 				break;
 			}
 		}
@@ -664,7 +679,7 @@ static struct open_file_s* logger_open_or_get_file(const char* prefix, const cha
 static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 	UNUSED(ctx);
 	if (msg_size < sizeof(struct logger_msg_s)) {
-        LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "msg too small %u", (unsigned)msg_size);
+		LOGGER_DEBUG_RL(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, 1000, "msg too small %u", (unsigned)msg_size);
 		return;
 	}
 	const struct logger_msg_s* msg = buf;
@@ -679,7 +694,6 @@ static void log_msg_handler(size_t msg_size, const void* buf, void* ctx) {
 
 	struct open_file_s* of = logger_open_or_get_file(msg->prefix, msg->suffix, msg->payload_len);
 	if (!of) {
-		LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "open fail %s.%s", msg->prefix, msg->suffix);
 		return;
 	}
 	// LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "open ok %s_%u.%s bytes=%lu wb=%u", of->prefix, (unsigned)of->index, of->suffix, (unsigned long)of->bytes_written, (unsigned)of->writebuf_len);
