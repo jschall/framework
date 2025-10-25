@@ -6,4 +6,4 @@
 	url = git@github.com:UAVCAN/dsdl.git
 [submodule "ChibiOS"]
 	path = ChibiOS
-	url = git@github.com:CubePilot/ChibiOS.git
+	url = git@github.com:jschall/ChibiOS.git
