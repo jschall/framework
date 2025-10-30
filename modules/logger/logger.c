@@ -724,7 +724,7 @@ RUN_ON(PUBSUB_TOPIC_INIT) {
 	/* One-shot idle flush task; initially disabled (TIME_INFINITE). */
 	worker_thread_add_timer_task(&WT, &logger_idle_sync_task, logger_sync_task_func, NULL, TIME_INFINITE, false);
 	/* Periodic stats printer (every 1s) */
-	worker_thread_add_timer_task(&WT, &logger_stats_task, logger_stats_task_func, NULL, chTimeS2I(1), true);
+	worker_thread_add_timer_task(&WT, &logger_stats_task, logger_stats_task_func, NULL, chTimeS2I(5), true);
 	logger_ensure_base_dir();
 	LOGGER_DEBUG(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "ready");
 }
